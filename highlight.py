@@ -52,6 +52,22 @@ class Highlights:
                 return highlight
         return None
 
+    def get_highlight_before(self, time):
+        result = None
+        for highlight in self.highlights:
+            if highlight.start_time <= time:
+                result = highlight
+            if highlight.start_time > time:
+                break
+        return result
+
+    def get_highlight_after(self, time):
+        for highlight in self.highlights:
+            if highlight.start_time > time:
+                return highlight
+
+   
+
     def delete_at_time(self, time):
         for highlight in self.highlights:
             if highlight.start_time <= time <= highlight.end_time:

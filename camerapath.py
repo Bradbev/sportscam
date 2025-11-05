@@ -21,11 +21,13 @@ class CameraPath:
     def __init__(self):
         self.camera_targets = []
 
-    def add_camera_target(self, camera_target):
-        index = self.camera_index(camera_target.time)
+    def truncate_path_to_time(self, time):
+        index = self.camera_index(time)
         if index < len(self.camera_targets)-1:
             self.camera_targets = self.camera_targets[0:index]
 
+    def add_camera_target(self, camera_target):
+        self.truncate_path_to_time(camera_target.time)
         self.camera_targets.append(camera_target)
 
     def camera_index(self, time):
@@ -44,7 +46,7 @@ class CameraPath:
         if index == -1:
             return 0, CameraTarget(0,0), 0
         if index >= len(self.camera_targets)-1:
-            return 0, self.camera_targets[-1], index
+            return self.camera_targets[-1].x, self.camera_targets[-1], index
 
         targets = self.camera_targets
 
