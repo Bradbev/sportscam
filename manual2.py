@@ -50,7 +50,7 @@ if not angleCam:
     roiCapture = outSize
 
 def ms_str(ms):
-    return humanize.precisedelta(timedelta(milliseconds=ms))
+    return str(timedelta(milliseconds=ms)).split(".")[0]
 
 def rotate_image(img, angle):
     size_reverse = np.array(img.shape[1::-1]) # swap x with y
@@ -122,38 +122,62 @@ class Processor:
         self.do_camera_cuts = writeOutputFile
         self.pending_active_playback_highlight = None
         self.active_playback_highlight = None
-        self.next_camera_is_cut = False
         loaded = load_pkl(filename + '.pkl')
         self.camera_path = CameraPath()
         self.highlights = Highlights()
         if loaded is not None:
             self.had_pickle = True
-            self.top_of_roi = loaded["top_of_roi"]
-            self.rotation = loaded["rotation"]
-            self.mini_rotation = loaded["mini_rotation"]
-            self.angle_left = loaded["angle_left"]
-            self.angle_right = loaded["angle_right"]
+            self.load_camera_config_pickle(loaded)
+
             self.camera_path = loaded["camera_path"]
-            self.mini_view_x = loaded["mini_view_x"]
-            self.mini_view_y = loaded["mini_view_y"]
             self.highlights = loaded["highlights"]
             self.highlights.active_save_highlight = None
+
 
 
     def set_last_pickle(self, pkl):
         if not pkl:
             return
+        # only load data if this video hasn't saved anything
         if not self.had_pickle:
-            # load some data from the previous pickle
-            self.top_of_roi = pkl["top_of_roi"]
-            self.rotation = pkl["rotation"]
-            self.mini_view_x = pkl["mini_view_x"]
-            self.mini_view_y = pkl["mini_view_y"]
-            self.mini_rotation = pkl["mini_rotation"]
-            cam_path = pkl["camera_path"]
-            self.camera_path = CameraPath()
-            self.camera_path.camera_targets = [CameraTarget(0, cam_path.camera_targets[-1].time, cam_path.camera_targets[-1].cut_to)]
+            # load camera data from the previous pickle
+            self.load_camera_config_pickle(pkl)
             self.auto_record = pkl["auto_record"]
+            if pkl["camera_is_cutting"]:
+                self.camera_path.add_camera_target(CameraTarget(0,0,True))
+        
+    def load_camera_config_pickle(self, pkl):
+        self.top_of_roi = pkl["top_of_roi"]
+        self.rotation = pkl["rotation"]
+        self.mini_rotation = pkl["mini_rotation"]
+        self.angle_left = pkl["angle_left"]
+        self.angle_right = pkl["angle_right"]
+        self.mini_view_x = pkl["mini_view_x"]
+        self.mini_view_y = pkl["mini_view_y"]
+
+    def save_pickle(self, finished):
+        is_cutting = len(self.camera_path.camera_targets) > 0 and self.camera_path.camera_targets[-1].cut_to
+        toSave = {
+            # Camera config
+            "top_of_roi" : self.top_of_roi,
+            "rotation" : self.rotation,
+            "mini_rotation":self.mini_rotation,
+            "angle_left":self.angle_left,
+            "angle_right":self.angle_right,
+            "mini_view_x": self.mini_view_x, 
+            "mini_view_y": self.mini_view_y,
+            ### end Camera config
+            # per file state
+            "camera_path" : self.camera_path,
+            "auto_record":self.auto_record,
+            "highlights":self.highlights,
+            "camera_is_cutting": is_cutting,
+            # processing state
+            "rendered" : writeOutputFile and finished,
+            "finished" : finished,
+        }
+        save_pkl(self.filename+'.pkl', toSave)
+
 
     def set_time(self, time):
         self.auto_record = False
@@ -175,8 +199,10 @@ class Processor:
 
     def handleKeys(self, key, frame_time):
         # Hard camera cut
+        highlight_is_playing = self.highlights.get_active_save_highlight() is not None
         if key == ord('c'):
-            self.next_camera_is_cut = True
+            if not highlight_is_playing and len(self.camera_path.camera_targets) > 0:
+                self.camera_path.camera_targets[-1].cut_to = True
 
         # Pausing
         if key == ord(' '):
@@ -184,7 +210,7 @@ class Processor:
 
         # highlights
         if key == ord('h'):
-            if self.highlights.get_active_save_highlight() is not None:
+            if highlight_is_playing:
                 # ending a highlight also trims the regular camera path so that cuts will work
                 self.camera_path.add_camera_target(self.highlights.get_active_save_highlight().get_camera_path().camera_targets[-1])
                 self.highlights.stop_highlight(frame_time, self.slowmo)
@@ -303,7 +329,8 @@ class Processor:
 
         fps = self.cap.get_fps()
         frame_ms = 1000 / fps
-        print(f"FPS: {fps}, FrameMS {frame_ms}")
+        total_vid_time = self.cap.get_frame_count()*frame_ms
+        print(f"FPS: {fps}, FrameMS {frame_ms}, Total Video Time: {total_vid_time}")
 
         if writeOutputFile:
             out = cv2.VideoWriter(path.join(basePath, self.filename+"_processed") + '.mp4', cv2.VideoWriter_fourcc(*"acv1"), fps, fullOutSize)
@@ -352,18 +379,28 @@ class Processor:
                 frame = rotate_image(frame, self.rotation)
 
                 # get the normal camera track
-                camera_x, next_camera, cam_index = self.camera_path.get_camera_at_time(frame_time)
+                camera_x, current_camera, next_camera = self.camera_path.get_camera_at_time(frame_time)
+
+                if frame_count == 1:
+                    # Jump ahead to the first camera if it's far enough away
+                    if current_camera.time - frame_time > 5000:
+                        self.set_time(current_camera.time)
+                        continue
+                    # if we happen to be cutting to a camera as we also change files....
+                    if current_camera.cut_to:
+                        self.set_time(next_camera.time)
+                        continue
 
                 # handle iso selection by advancing to the next camera if the gap is > 30s
-                # do the same if it's the start of the game
-                if self.active_playback_highlight is None and (iso or cam_index == 0) and next_camera.time - frame_time > 30000:
+                if self.active_playback_highlight is None and iso and next_camera.time - frame_time > 30000:
                     self.set_time(next_camera.time)
                     continue
 
                 saving_highlight = self.highlights.get_active_save_highlight()
                 if saving_highlight is not None:
-                    camera_x, next_camera, cam_index = saving_highlight.get_camera_path().get_camera_at_time(frame_time)
+                    camera_x, current_camera, next_camera = saving_highlight.get_camera_path().get_camera_at_time(frame_time)
                 
+                # highlight start
                 if not is_wiping:
                     if self.play_highlights and not saving_highlight and not self.pending_active_playback_highlight:
                         h = self.highlights.get_highlight_by_end_time(frame_time)
@@ -376,6 +413,7 @@ class Processor:
                                 self.set_time(h.start_time)
                             do_wipe_then(start_highlight)
                                 
+                # highlight end
                 if not is_wiping:
                     if self.active_playback_highlight and frame_time > self.active_playback_highlight.end_time:
                         def end_highlight():
@@ -387,15 +425,17 @@ class Processor:
                             self.slowmo = False
                         do_wipe_then(end_highlight)
                 
+                # camera cut
                 if not is_wiping:
-                    if self.do_camera_cuts and not self.pending_active_playback_highlight and next_camera.cut_to and next_camera.time - frame_time > 2000:
+                    next_camera_good = (next_camera.time - frame_time > 2000) or current_camera == next_camera
+                    if self.do_camera_cuts and not self.pending_active_playback_highlight and current_camera.cut_to and next_camera_good:
                         cut_to_time = next_camera.time
                         def jump_to_next_camera():
                             self.set_time(cut_to_time)
                         do_wipe_then(jump_to_next_camera)
 
                 if self.active_playback_highlight:
-                    camera_x, next_camera, cam_index = self.active_playback_highlight.get_camera_path().get_camera_at_time(frame_time)
+                    camera_x, current_camera, next_camera = self.active_playback_highlight.get_camera_path().get_camera_at_time(frame_time)
 
                 max_x = frame.shape[1]-outSize[0]
                 x = int(np.clip(camera_x, 0, max_x))
@@ -406,10 +446,9 @@ class Processor:
                         self.last_auto_time = frame_time
 
                     if saving_highlight is not None:
-                        saving_highlight.get_camera_path().add_camera_target(CameraTarget(frame_time, clamped_mouse_x, self.next_camera_is_cut))
+                        saving_highlight.get_camera_path().add_camera_target(CameraTarget(frame_time, clamped_mouse_x))
                     else:
-                        self.camera_path.add_camera_target(CameraTarget(frame_time, clamped_mouse_x, self.next_camera_is_cut))
-                    self.next_camera_is_cut = False
+                        self.camera_path.add_camera_target(CameraTarget(frame_time, clamped_mouse_x))
                     mouse_click = False
 
                 use_live_cam = self.auto_record or self.isPaused() or frame_time > next_camera.time
@@ -440,14 +479,15 @@ class Processor:
                 if not writeOutputFile:
                     # Display the annotated main frame
                     text_y = 1550
-                    line1 = f"{self.camera_path.to_string(frame_time)} @ {ms_str(next_camera.time)} {len(self.highlights.get_highlights())} highlights"
+                    line1 = f"{self.angle_left:.1f} | {self.rotation:.1f} | {self.angle_right:.1f} | "
+                    line1 += f"{self.camera_path.to_string(frame_time)} @ {ms_str(next_camera.time)} {len(self.highlights.get_highlights())} highlights"
                     if saving_highlight is not None:
                         line1 += f" Saving Highlight {saving_highlight.get_camera_path().to_string(frame_time)}"
-                    if self.next_camera_is_cut:
-                        line1 += " ***** CUT TO NEXT CAMERA *****"
+                    if current_camera.cut_to:
+                        line1 += " * IN CAMERA CUT *"
                     cv2.putText(frame, line1, (0,text_y), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (0,255,0), 4)
 
-                    line2 = f"{ms_str(frame_time)} {"Auto" if self.auto_record else ""}"
+                    line2 = f"{ms_str(frame_time)} / {ms_str(total_vid_time)} {"Auto" if self.auto_record else ""}"
                     if self.play_highlights:
                         line2 += " will play highlights"
                     if self.highlights.get_highlight_at_time(frame_time):
@@ -488,23 +528,7 @@ class Processor:
                 # Break the loop if the end of the video is reached
                 break
         finished = not self.isRunning()
-        toSave = {
-            "top_of_roi" : self.top_of_roi,
-            "rotation" : self.rotation,
-            "camera_path" : self.camera_path,
-            "finished" : finished,
-            "rendered" : writeOutputFile and finished,
-            "auto_record":self.auto_record,
-            "mini_view_x": self.mini_view_x, 
-            "mini_view_y": self.mini_view_y,
-            "highlights":self.highlights,
-            "angle_left":self.angle_left,
-            "angle_right":self.angle_right,
-            "mini_rotation":self.mini_rotation,
-            "next_camera_is_cut":self.next_camera_is_cut,
-        }
-        save_pkl(self.filename+'.pkl', toSave)
-
+        self.save_pickle(finished)
         # Release the video capture object and close the display window
         self.cap.release()
         if writeOutputFile:

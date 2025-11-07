@@ -39,14 +39,15 @@ class CameraPath:
             return index
         return index
 
+    # returns x value, the current camera, and the next camera
     def get_camera_at_time(self, frame_time):
         if len(self.camera_targets) == 0:
-            return 0, CameraTarget(0,0), 0
+            return 0, CameraTarget(0,0), CameraTarget(0,0)
         index = self.camera_index(frame_time)
         if index == -1:
-            return 0, CameraTarget(0,0), 0
+            return 0, CameraTarget(0,0), CameraTarget(0,0)
         if index >= len(self.camera_targets)-1:
-            return self.camera_targets[-1].x, self.camera_targets[-1], index
+            return self.camera_targets[-1].x, self.camera_targets[-1], self.camera_targets[-1]
 
         targets = self.camera_targets
 
@@ -69,7 +70,7 @@ class CameraPath:
                 if camera_direction != next_dir:
                     fraction = cubic(fraction)
 
-        return current.x + ((next.x - current.x) * (fraction)), next, index
+        return current.x + ((next.x - current.x) * (fraction)), current, next
 
     def has_targets(self):
         return len(self.camera_targets) > 0

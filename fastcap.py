@@ -50,6 +50,9 @@ class FastCap():
 
     def get_fps(self):
         return self.fps
+
+    def get_frame_count(self):
+        return self.cap.get(cv2.CAP_PROP_FRAME_COUNT)
     
     def isOpened(self):
         return self.running
