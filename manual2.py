@@ -102,9 +102,10 @@ cv2.namedWindow('frame')
 cv2.setMouseCallback('frame', mouse_callback)
 
 class Processor:
-    def __init__(self, filename):
-        print(filename)
-        self.filename = filename
+    def __init__(self, filenames):
+        print(filenames)
+        self.filenames = filenames
+        self.filename = filenames[0]
         self.paused = False
         self.auto_record = False
         self.last_auto_time = 0
@@ -122,7 +123,7 @@ class Processor:
         self.do_camera_cuts = writeOutputFile
         self.pending_active_playback_highlight = None
         self.active_playback_highlight = None
-        loaded = load_pkl(filename + '.pkl')
+        loaded = load_pkl(self.filename + '.pkl')
         self.camera_path = CameraPath()
         self.highlights = Highlights()
         if loaded is not None:
@@ -325,7 +326,7 @@ class Processor:
         global mouse_x
         global mouse_click
         camera_x = 0
-        self.cap = fastcap.FastCap(self.filename+'.MP4')
+        self.cap = fastcap.FastCap([x + ".mp4" for x in self.filenames])
 
         fps = self.cap.get_fps()
         frame_ms = 1000 / fps
@@ -487,7 +488,7 @@ class Processor:
                         line1 += " * IN CAMERA CUT *"
                     cv2.putText(frame, line1, (0,text_y), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (0,255,0), 4)
 
-                    line2 = f"{ms_str(frame_time)} / {ms_str(total_vid_time)} {"Auto" if self.auto_record else ""}"
+                    line2 = f"{ms_str(frame_time)} / {ms_str(total_vid_time)} Cap({self.cap.get_cap_index()}) {"Auto" if self.auto_record else ""}"
                     if self.play_highlights:
                         line2 += " will play highlights"
                     if self.highlights.get_highlight_at_time(frame_time):
@@ -539,7 +540,7 @@ class Processor:
 def load_logo():
     global logo_frames
     global logo_masks
-    cap = fastcap.FastCap(args.logo)
+    cap = fastcap.FastCap([args.logo])
     while True:
         success, frame = cap.read_frame()
         if not success:
@@ -575,6 +576,14 @@ def show_logo():
 
     cap2.release()
 
+def examine_files2():
+    raw_files = glob.glob(path.join(basePath, "*.mp4"))
+    sources = [Path(f) for f in raw_files if not "_processed" in f]
+    p = Processor([str(fp.with_suffix("")) for fp in sources])
+    print(f"Starting process for {sources}")
+    p.process()
+    print(f"process for {sources} done")
+ 
 def examine_files():
     raw_files = glob.glob(path.join(basePath, "*.mp4"))
     sources = [Path(f) for f in raw_files if not "_processed" in f]
@@ -602,5 +611,5 @@ load_logo()
 if args.show_logo:
     show_logo()
 else:
-    examine_files()
+    examine_files2()
 cv2.destroyAllWindows()
