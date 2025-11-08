@@ -134,19 +134,6 @@ class Processor:
             self.highlights = loaded["highlights"]
             self.highlights.active_save_highlight = None
 
-
-
-    def set_last_pickle(self, pkl):
-        if not pkl:
-            return
-        # only load data if this video hasn't saved anything
-        if not self.had_pickle:
-            # load camera data from the previous pickle
-            self.load_camera_config_pickle(pkl)
-            self.auto_record = pkl["auto_record"]
-            if pkl["camera_is_cutting"]:
-                self.camera_path.add_camera_target(CameraTarget(0,0,True))
-        
     def load_camera_config_pickle(self, pkl):
         self.top_of_roi = pkl["top_of_roi"]
         self.rotation = pkl["rotation"]
@@ -157,7 +144,6 @@ class Processor:
         self.mini_view_y = pkl["mini_view_y"]
 
     def save_pickle(self, finished):
-        is_cutting = len(self.camera_path.camera_targets) > 0 and self.camera_path.camera_targets[-1].cut_to
         toSave = {
             # Camera config
             "top_of_roi" : self.top_of_roi,
@@ -172,7 +158,6 @@ class Processor:
             "camera_path" : self.camera_path,
             "auto_record":self.auto_record,
             "highlights":self.highlights,
-            "camera_is_cutting": is_cutting,
             # processing state
             "rendered" : writeOutputFile and finished,
             "finished" : finished,
@@ -576,7 +561,7 @@ def show_logo():
 
     cap2.release()
 
-def examine_files2():
+def examine_files():
     raw_files = glob.glob(path.join(basePath, "*.mp4"))
     sources = [Path(f) for f in raw_files if not "_processed" in f]
     p = Processor([str(fp.with_suffix("")) for fp in sources])
@@ -584,32 +569,9 @@ def examine_files2():
     p.process()
     print(f"process for {sources} done")
  
-def examine_files():
-    raw_files = glob.glob(path.join(basePath, "*.mp4"))
-    sources = [Path(f) for f in raw_files if not "_processed" in f]
-    last_pickle = None
-    state = None
-    for fp in sources:
-        state = load_pkl(fp.with_suffix(".pkl"))
-        process_file = True
-        if state and not args.no_skip:
-            process_file = state["finished"] is False
-            if writeOutputFile:
-                process_file = not state["rendered"]
-
-        if process_file:
-            p = Processor(str(fp.with_suffix("")))
-            p.set_last_pickle(last_pickle)
-            print(f"Starting process for {fp}")
-            if not p.process():
-                break
-            print(f"process for {fp} done")
-            # reload the pickle that the process() call saved
-            last_pickle = load_pkl(fp.with_suffix(".pkl"))
-
 load_logo()
 if args.show_logo:
     show_logo()
 else:
-    examine_files2()
+    examine_files()
 cv2.destroyAllWindows()
