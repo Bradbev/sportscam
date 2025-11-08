@@ -28,6 +28,10 @@ class CameraPath:
 
     def add_camera_target(self, camera_target):
         self.truncate_path_to_time(camera_target.time)
+        if len(self.camera_targets) > 0:
+            if self.camera_targets[-1].time == camera_target.time:
+                self.camera_targets[-1] = camera_target
+                return
         self.camera_targets.append(camera_target)
 
     def camera_index(self, time):
@@ -42,12 +46,12 @@ class CameraPath:
     # returns x value, the current camera, and the next camera
     def get_camera_at_time(self, frame_time):
         if len(self.camera_targets) == 0:
-            return 0, CameraTarget(0,0), CameraTarget(0,0)
+            return CameraTarget(), CameraTarget(), CameraTarget()
         index = self.camera_index(frame_time)
         if index == -1:
-            return 0, CameraTarget(0,0), CameraTarget(0,0)
+            return CameraTarget(), CameraTarget(), CameraTarget() 
         if index >= len(self.camera_targets)-1:
-            return self.camera_targets[-1].x, self.camera_targets[-1], self.camera_targets[-1]
+            return self.camera_targets[-1], self.camera_targets[-1], self.camera_targets[-1]
 
         targets = self.camera_targets
 
@@ -69,8 +73,11 @@ class CameraPath:
                 next_dir = sign(targets[index+2].x - next.x)
                 if camera_direction != next_dir:
                     fraction = cubic(fraction)
-
-        return current.x + ((next.x - current.x) * (fraction)), current, next
+        cam_x = current.x + ((next.x - current.x) * (fraction))
+        cam_y = current.y + ((next.y - current.y) * (fraction))
+        zoom = current.zoom + ((next.zoom - current.zoom) * (fraction))
+        cam = CameraTarget(frame_time, x=cam_x, y=cam_y, cut_to=current.cut_to, zoom=zoom)
+        return cam, current, next
 
     def has_targets(self):
         return len(self.camera_targets) > 0

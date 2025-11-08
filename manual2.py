@@ -35,6 +35,7 @@ def scale(sz, s=0.25):
     return (int(sz[0]*s),int(sz[1]*s))
 
 mouse_x = 0
+mouse_y = 0
 mouse_click = False
 
 inputSize = (3840, 2880)
@@ -52,9 +53,9 @@ if not angleCam:
 def ms_str(ms):
     return str(timedelta(milliseconds=ms)).split(".")[0]
 
-def rotate_image(img, angle):
+def rotate_image(img, angle, scale=1.0):
     size_reverse = np.array(img.shape[1::-1]) # swap x with y
-    M = cv2.getRotationMatrix2D(tuple(size_reverse / 2.), angle, 1.)
+    M = cv2.getRotationMatrix2D(tuple(size_reverse / 2.), angle, scale)
     MM = np.absolute(M[:,:2])
     size_new = MM @ size_reverse
     M[:,-1] += (size_new - size_reverse) / 2.
@@ -69,8 +70,9 @@ def rotate_image_crop(img, angle):
     return cv2.warpAffine(img, M, (cols, rows))
 
 def mouse_callback(event, x, y, flags, param):
-    global mouse_x, mouse_click
+    global mouse_x, mouse_y, mouse_click
     mouse_x = int((x-outSize[0]/2)*2)
+    mouse_y = int((y-outSize[1]/2)*2)
     if event == cv2.EVENT_LBUTTONDOWN:
         mouse_click = True
 
@@ -119,6 +121,7 @@ class Processor:
         self.angle_right = 9
         self.pureFrame = None
         self.slowmo = False
+        self.zoom = 1.0
         self.play_highlights = writeOutputFile
         self.do_camera_cuts = writeOutputFile
         self.pending_active_playback_highlight = None
@@ -184,6 +187,12 @@ class Processor:
         return self.paused
 
     def handleKeys(self, key, frame_time):
+        #zoom 
+        if key == ord('z'):
+            self.zoom = min(3.0, self.zoom + 0.1)
+        if key == ord('Z'):
+            self.zoom = max(1.0, self.zoom - 0.1)
+
         # Hard camera cut
         highlight_is_playing = self.highlights.get_active_save_highlight() is not None
         if key == ord('c'):
@@ -288,29 +297,34 @@ class Processor:
     def readFrame(self):
         return self.cap.read_frame()
 
-    def _create_output_frame(self, source_frame, x_pos, max_x):
+    def _create_output_frame(self, source_frame, x_pos, y_pos, max_x, zoom, show_target):
         """Helper function to create the final output frame (cropped, rotated, letterboxed)."""
         (w,h) = roiCapture
-        y = self.top_of_roi * 5
-        outFrame = source_frame[y:y+h, x_pos:x_pos+w]
-
+        y = self.top_of_roi * 5 + y_pos
+        roi_frame = source_frame[y:y+h, x_pos:x_pos+w]
+        out_sized_rotated = None
         if angleCam:
             angle = np.interp([x_pos], [0, max_x], [self.angle_left, self.angle_right])[0]
             y_adjust = int(np.interp([x_pos], [0, max_x/2, max_x], [200,0,200])[0])
-            outFrame = rotate_image(outFrame, angle)
-            xr, yr = int(diag/2-outSize[0]/2), int(diag/2-outSize[1]/2) + y_adjust - 400
-            outFrame = outFrame[yr:yr+outSize[1], xr:xr+outSize[0]]
+            rotated_frame = rotate_image(roi_frame, angle, zoom)
+            shape = rotated_frame.shape 
+            xr, yr = int(shape[0]/2-outSize[0]/2*zoom), int(shape[1]/2-outSize[1]/2) + y_adjust - int(400*zoom)
+            out_sized_rotated = rotated_frame[yr:yr+outSize[1], xr:xr+outSize[0]]
+
+        if show_target:
+            red = (0,0,255)
+            rx, ry = int(outSize[0]/2), int(outSize[1]/2)
+            cv2.line(out_sized_rotated, (rx-50,ry),(rx+50,ry), red, 1)
+            cv2.line(out_sized_rotated, (rx,ry-50),(rx,ry+50), red, 1)
 
         # Add black bars to make it full HD
         top_border = (fullOutSize[1] - outSize[1]) // 2
         bottom_border = fullOutSize[1] - outSize[1] - top_border
-        outFrame = cv2.copyMakeBorder(outFrame, top_border, bottom_border, 0, 0, cv2.BORDER_CONSTANT, value=[0,0,0])
-        return outFrame
+        return cv2.copyMakeBorder(out_sized_rotated, top_border, bottom_border, 0, 0, cv2.BORDER_CONSTANT, value=[0,0,0])
 
     def process(self):
         global mouse_x
         global mouse_click
-        camera_x = 0
         self.cap = fastcap.FastCap([x + ".mp4" for x in self.filenames])
 
         fps = self.cap.get_fps()
@@ -365,7 +379,7 @@ class Processor:
                 frame = rotate_image(frame, self.rotation)
 
                 # get the normal camera track
-                camera_x, current_camera, next_camera = self.camera_path.get_camera_at_time(frame_time)
+                camera, current_camera, next_camera = self.camera_path.get_camera_at_time(frame_time)
 
                 if frame_count == 1:
                     # Jump ahead to the first camera if it's far enough away
@@ -384,7 +398,7 @@ class Processor:
 
                 saving_highlight = self.highlights.get_active_save_highlight()
                 if saving_highlight is not None:
-                    camera_x, current_camera, next_camera = saving_highlight.get_camera_path().get_camera_at_time(frame_time)
+                    camera, current_camera, next_camera = saving_highlight.get_camera_path().get_camera_at_time(frame_time)
                 
                 # highlight start
                 if not is_wiping:
@@ -421,27 +435,35 @@ class Processor:
                         do_wipe_then(jump_to_next_camera)
 
                 if self.active_playback_highlight:
-                    camera_x, current_camera, next_camera = self.active_playback_highlight.get_camera_path().get_camera_at_time(frame_time)
+                    camera, current_camera, next_camera = self.active_playback_highlight.get_camera_path().get_camera_at_time(frame_time)
 
-                max_x = frame.shape[1]-outSize[0]
-                x = int(np.clip(camera_x, 0, max_x))
-                clamped_mouse_x = int(np.clip(mouse_x, 0, frame.shape[1]-outSize[0]))
+                use_live_cam = self.auto_record or self.isPaused() or frame_time > next_camera.time
+                use_live_cam = use_live_cam and not self.active_playback_highlight
+                zoom = self.zoom if use_live_cam else camera.zoom
+
+                max_x = (frame.shape[1]-outSize[0]) * zoom
+                x = int(np.clip(camera.x, 0, max_x))
+                y = int(camera.y)
+                clamped_mouse_x = int(np.clip(mouse_x, 0, max_x))
+                clamped_mouse_y = int(np.clip(mouse_y - 500, -200, 1500))
+
+                frame_x = clamped_mouse_x if use_live_cam else x
+                frame_y_offset = clamped_mouse_y if use_live_cam else y
+                if zoom == 1.0:
+                    frame_y_offset = 0
 
                 if mouse_click or (self.auto_record and frame_time > self.last_auto_time + 1000):
                     if self.auto_record:
                         self.last_auto_time = frame_time
 
                     if saving_highlight is not None:
-                        saving_highlight.get_camera_path().add_camera_target(CameraTarget(frame_time, clamped_mouse_x))
+                        saving_highlight.get_camera_path().add_camera_target(CameraTarget(frame_time, x=clamped_mouse_x, y=clamped_mouse_y, zoom=self.zoom))
                     else:
-                        self.camera_path.add_camera_target(CameraTarget(frame_time, clamped_mouse_x))
+                        self.camera_path.add_camera_target(CameraTarget(frame_time, x=clamped_mouse_x, y=clamped_mouse_y, zoom=self.zoom))
                     mouse_click = False
 
-                use_live_cam = self.auto_record or self.isPaused() or frame_time > next_camera.time
-                use_live_cam = use_live_cam and not self.active_playback_highlight
-                frame_x = clamped_mouse_x if use_live_cam else x
-
-                outFrame = self._create_output_frame(frame, frame_x, max_x)
+                show_target = not writeOutputFile and zoom > 1.0 and (next_camera.time < frame_time or self.paused)
+                outFrame = self._create_output_frame(frame, frame_x, frame_y_offset, max_x, zoom, show_target)
                 # Composite the captured mini-view onto the output frame at (0,0)
                 outFrame[0:mini_view_rot_size[1], 0:mini_view_rot_size[0]] = mini_view
 
@@ -473,7 +495,7 @@ class Processor:
                         line1 += " * IN CAMERA CUT *"
                     cv2.putText(frame, line1, (0,text_y), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (0,255,0), 4)
 
-                    line2 = f"{ms_str(frame_time)} / {ms_str(total_vid_time)} Cap({self.cap.get_cap_index()}) {"Auto" if self.auto_record else ""}"
+                    line2 = f"{ms_str(frame_time)} / {ms_str(total_vid_time)} Cap({self.cap.get_cap_index()}) {"Auto" if self.auto_record else ""} Zoom: {zoom:.1f}"
                     if self.play_highlights:
                         line2 += " will play highlights"
                     if self.highlights.get_highlight_at_time(frame_time):
@@ -490,8 +512,8 @@ class Processor:
                         cv2.rectangle(frame, (x,y),(x+w,y+h), blue, 10)
 
                     if self.active_playback_highlight is not None:
-                        hx,_,_ = self.active_playback_highlight.get_camera_path().get_camera_at_time(frame_time)
-                        hx = int(np.clip(hx, 0, max_x))
+                        highlight_cam,_,_ = self.active_playback_highlight.get_camera_path().get_camera_at_time(frame_time)
+                        hx = int(np.clip(highlight_cam.x, 0, max_x))
                         cyan = (255,255,0)
                         cv2.rectangle(frame, (hx,y),(hx+w,y+h), cyan, 5)
 
@@ -525,6 +547,8 @@ class Processor:
 def load_logo():
     global logo_frames
     global logo_masks
+    if args.logo is None:
+        return
     cap = fastcap.FastCap([args.logo])
     while True:
         success, frame = cap.read_frame()

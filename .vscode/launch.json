@@ -11,7 +11,7 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
-            "args": "d:\\RawVideo\\testdata --logo d:\\RawVideo\\wipes\\sharklogo_raw.mp4 --render",
+            "args": "d:\\RawVideo\\testdata --logo d:\\RawVideo\\wipes\\sharkwipe.mov",
         }
     ]
 }
