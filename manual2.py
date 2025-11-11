@@ -47,6 +47,7 @@ mini_view_rot_size = (300, 180)
 
 diag = int(math.ceil(math.sqrt(outSize[0]**2 + outSize[1]**2))) + 100
 roiCapture = (diag,diag)
+
 if not angleCam:
     roiCapture = outSize
 
@@ -61,10 +62,9 @@ def rotate_image(img, angle, scale=1.0):
     M[:,-1] += (size_new - size_reverse) / 2.
     return cv2.warpAffine(img, M, tuple(size_new.astype(int)))
 
-def rotate_image_crop(img, angle):
+def rotate_image_crop(img, angle, scale=1.0):
     rows, cols, _ = img.shape
     center = (cols // 2, rows // 2)
-    scale = 1.0 # No scaling
     # Get the 2D rotation matrix
     M = cv2.getRotationMatrix2D(center, angle, scale)
     return cv2.warpAffine(img, M, (cols, rows))
@@ -124,6 +124,7 @@ class Processor:
         self.zoom = 1.0
         self.play_highlights = writeOutputFile
         self.do_camera_cuts = writeOutputFile
+        self.finished_rendering = False
         self.pending_active_playback_highlight = None
         self.active_playback_highlight = None
         loaded = load_pkl(self.filename + '.pkl')
@@ -181,7 +182,7 @@ class Processor:
         self.set_time(frame_time)
 
     def isRunning(self):
-        return self.cap.isOpened()
+        return self.cap.isOpened() and not self.finished_rendering
 
     def isPaused(self):
         return self.paused
@@ -198,6 +199,7 @@ class Processor:
         if key == ord('c'):
             if not highlight_is_playing and len(self.camera_path.camera_targets) > 0:
                 self.camera_path.camera_targets[-1].cut_to = True
+                self.auto_record = False
 
         # Pausing
         if key == ord(' '):
@@ -206,12 +208,14 @@ class Processor:
         # highlights
         if key == ord('h'):
             if highlight_is_playing:
-                # ending a highlight also trims the regular camera path so that cuts will work
-                self.camera_path.add_camera_target(self.highlights.get_active_save_highlight().get_camera_path().camera_targets[-1])
+                # ending a highlight also trims the regular camera path so that cuts will work, and auto marks it as a cut
+                ct = self.highlights.get_active_save_highlight().get_camera_path().camera_targets[-1]
+                self.camera_path.add_camera_target(CameraTarget(ct.time+1000, ct.x, ct.y, cut_to=True, zoom=1.0))
                 self.highlights.stop_highlight(frame_time, self.slowmo)
+                self.set_time(self.camera_path.get_last_cam_time())
                 self.auto_record = False
+                self.zoom = 1.0
             else:
-                self.auto_record = True
                 self.highlights.start_highlight(frame_time)
         if key == ord('@'):
             h = self.highlights.get_highlight_before(frame_time)
@@ -284,14 +288,12 @@ class Processor:
 
         # Camera controls
         if self.camera_path.has_targets():
-            if key == ord('0'):
-                self.set_time(self.camera_path.get_last_cam_time())
-            if key == ord('9'):
-                self.set_time(self.camera_path.get_next_cam_time(frame_time))
             if key == ord('8'):
                 self.set_time(self.camera_path.get_prev_cam_time(frame_time))
-            if key == ord('7'):
-                self.set_time(0)
+            if key == ord('9'):
+                self.set_time(self.camera_path.get_next_cam_time(frame_time))
+            if key == ord('0'):
+                self.set_time(self.camera_path.get_last_cam_time())
 
 
     def readFrame(self):
@@ -300,12 +302,14 @@ class Processor:
     def _create_output_frame(self, source_frame, x_pos, y_pos, max_x, zoom, show_target):
         """Helper function to create the final output frame (cropped, rotated, letterboxed)."""
         (w,h) = roiCapture
+        x_pos = int(min(x_pos, source_frame.shape[1]-w))
+
         y = self.top_of_roi * 5 + y_pos
         roi_frame = source_frame[y:y+h, x_pos:x_pos+w]
         out_sized_rotated = None
         if angleCam:
             angle = np.interp([x_pos], [0, max_x], [self.angle_left, self.angle_right])[0]
-            y_adjust = int(np.interp([x_pos], [0, max_x/2, max_x], [200,0,200])[0])
+#            y_adjust = int(np.interp([x_pos], [0, max_x/2, max_x], [200,0,200])[0])
             rotated_frame = rotate_image(roi_frame, angle, zoom)
             shape = rotated_frame.shape 
             xr, yr = int(shape[0]/2-outSize[0]/2*zoom), int(shape[1]/2-outSize[1]/2) + y_adjust - int(400*zoom)
@@ -314,8 +318,11 @@ class Processor:
         if show_target:
             red = (0,0,255)
             rx, ry = int(outSize[0]/2), int(outSize[1]/2)
+            y_off = int(outSize[1]/6)
             cv2.line(out_sized_rotated, (rx-50,ry),(rx+50,ry), red, 1)
-            cv2.line(out_sized_rotated, (rx,ry-50),(rx,ry+50), red, 1)
+            cv2.line(out_sized_rotated, (rx,ry-y_off),(rx,ry+y_off), red, 1)
+            cv2.line(out_sized_rotated, (rx-50,ry-y_off),(rx+50,ry-y_off), red, 1)
+            cv2.line(out_sized_rotated, (rx-50,ry+y_off),(rx+50,ry+y_off), red, 1)
 
         # Add black bars to make it full HD
         top_border = (fullOutSize[1] - outSize[1]) // 2
@@ -380,7 +387,12 @@ class Processor:
 
                 # get the normal camera track
                 camera, current_camera, next_camera = self.camera_path.get_camera_at_time(frame_time)
-
+                if not is_wiping and writeOutputFile and current_camera == next_camera:
+                    # no more cameras, finish rendering
+                    def finish_up():
+                        self.finished_rendering = True
+                    do_wipe_then(finish_up) 
+ 
                 if frame_count == 1:
                     # Jump ahead to the first camera if it's far enough away
                     if current_camera.time - frame_time > 5000:
@@ -399,7 +411,7 @@ class Processor:
                 saving_highlight = self.highlights.get_active_save_highlight()
                 if saving_highlight is not None:
                     camera, current_camera, next_camera = saving_highlight.get_camera_path().get_camera_at_time(frame_time)
-                
+               
                 # highlight start
                 if not is_wiping:
                     if self.play_highlights and not saving_highlight and not self.pending_active_playback_highlight:
@@ -417,8 +429,8 @@ class Processor:
                 if not is_wiping:
                     if self.active_playback_highlight and frame_time > self.active_playback_highlight.end_time:
                         def end_highlight():
-                            _, after_wipe_cam, _ = self.camera_path.get_camera_at_time(frame_time)
-                            if after_wipe_cam and after_wipe_cam.cut_to:
+                            _, at_wipe_end_cam, after_wipe_cam = self.camera_path.get_camera_at_time(frame_time)
+                            if at_wipe_end_cam and at_wipe_end_cam.cut_to:
                                 self.set_time(after_wipe_cam.time)
                             self.active_playback_highlight = None
                             self.pending_active_playback_highlight = None
@@ -445,12 +457,12 @@ class Processor:
                 x = int(np.clip(camera.x, 0, max_x))
                 y = int(camera.y)
                 clamped_mouse_x = int(np.clip(mouse_x, 0, max_x))
-                clamped_mouse_y = int(np.clip(mouse_y - 500, -200, 1500))
+                clamped_mouse_y = int(np.clip(mouse_y - 500, -500, 1500))
 
                 frame_x = clamped_mouse_x if use_live_cam else x
-                frame_y_offset = clamped_mouse_y if use_live_cam else y
                 if zoom == 1.0:
-                    frame_y_offset = 0
+                   clamped_mouse_y = 0
+                frame_y_offset = clamped_mouse_y if use_live_cam else y
 
                 if mouse_click or (self.auto_record and frame_time > self.last_auto_time + 1000):
                     if self.auto_record:
