@@ -11,7 +11,8 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
-            "args": "d:\\RawVideo\\2025-11-09-sharks --logo d:\\RawVideo\\_wipes\\sharkwipe.mov",
+            "args": "d:\\RawVideo\\2025-11-09 --logo d:\\RawVideo\\_wipes\\novawipe.mov",
+            //"args": "d:\\RawVideo\\2025-11-09 --logo d:\\RawVideo\\_wipes\\sharkwipe.mov",
         }
     ]
 }

@@ -195,9 +195,9 @@ class Processor:
             self.zoom = max(1.0, self.zoom - 0.1)
 
         # Hard camera cut
-        highlight_is_playing = self.highlights.get_active_save_highlight() is not None
+        highlight_is_saving = self.highlights.get_active_save_highlight() is not None
         if key == ord('c'):
-            if not highlight_is_playing and len(self.camera_path.camera_targets) > 0:
+            if not highlight_is_saving and len(self.camera_path.camera_targets) > 0:
                 self.camera_path.camera_targets[-1].cut_to = True
                 self.auto_record = False
 
@@ -207,12 +207,15 @@ class Processor:
 
         # highlights
         if key == ord('h'):
-            if highlight_is_playing:
+            if highlight_is_saving:
                 # ending a highlight also trims the regular camera path so that cuts will work, and auto marks it as a cut
-                ct = self.highlights.get_active_save_highlight().get_camera_path().camera_targets[-1]
-                self.camera_path.add_camera_target(CameraTarget(ct.time+1000, ct.x, ct.y, cut_to=True, zoom=1.0))
-                self.highlights.stop_highlight(frame_time, self.slowmo)
-                self.set_time(self.camera_path.get_last_cam_time())
+                if len(self.highlights.get_active_save_highlight().get_camera_path().camera_targets) > 0:
+                    ct = self.highlights.get_active_save_highlight().get_camera_path().camera_targets[-1]
+                    self.camera_path.truncate_path_to_time(frame_time)
+                    self.camera_path.add_camera_target(CameraTarget(frame_time+1000, ct.x, ct.y, cut_to=True, zoom=1.0))
+                    self.highlights.stop_highlight(frame_time, self.slowmo)
+                else:
+                    self.highlights.abort_highlight()
                 self.auto_record = False
                 self.zoom = 1.0
             else:
@@ -282,7 +285,7 @@ class Processor:
         if key == ord('2'):
             self.skip_time(-1000 * 5)
         if key == ord('3'):
-            self.skip_time(1000 * 10)
+            self.skip_time(1000 * 9)
         if key == ord('4'):
             self.skip_time(1000 * 60)
 
@@ -309,7 +312,7 @@ class Processor:
         out_sized_rotated = None
         if angleCam:
             angle = np.interp([x_pos], [0, max_x], [self.angle_left, self.angle_right])[0]
-#            y_adjust = int(np.interp([x_pos], [0, max_x/2, max_x], [200,0,200])[0])
+            y_adjust = int(np.interp([x_pos], [0, max_x/2, max_x], [200,0,200])[0])
             rotated_frame = rotate_image(roi_frame, angle, zoom)
             shape = rotated_frame.shape 
             xr, yr = int(shape[0]/2-outSize[0]/2*zoom), int(shape[1]/2-outSize[1]/2) + y_adjust - int(400*zoom)
@@ -533,6 +536,7 @@ class Processor:
                     red = (55,0,200)
                     rect_col = purple if self.auto_record else red
                     cv2.rectangle(frame, (clamped_mouse_x,y),(clamped_mouse_x+w,y+h), rect_col, 10)
+                    cv2.line(frame, (clamped_mouse_x+w//2,y),(clamped_mouse_x+w//2,y+h), rect_col, 1)
 
                     frame = frame[1500:3200,0:frame.shape[1]]
                     frame = cv2.resize(frame, viewSize)

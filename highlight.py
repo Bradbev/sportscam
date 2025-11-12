@@ -10,6 +10,8 @@ class Highlight:
     def close(self, end_time, slowmo):
         if len(self.camera_path.camera_targets) > 0:
             self.camera_path.camera_targets[-1].time = end_time
+            self.start_time = self.camera_path.camera_targets[0].time
+
         self.end_time = end_time
         self.slowmo = slowmo
 
@@ -39,6 +41,10 @@ class Highlights:
         self.active_save_highlight.close(time, slowmo)
         self.highlights.append(self.active_save_highlight)
         self.active_save_highlight = None
+
+    def abort_highlight(self):
+        self.active_save_highlight = None
+
 
     def get_highlights(self):
         return self.highlights
