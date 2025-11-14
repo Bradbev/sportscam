@@ -337,12 +337,14 @@ class Processor:
 
     def _create_output_frame(self, source_frame, x_pos, y_pos, max_x, zoom, show_target):
         """Helper function to create the final output frame (cropped, rotated, letterboxed)."""
-        (w,h) = roi_size
+        (w,h) = (int(roi_size[0] / zoom), int(roi_size[1] / zoom))
         x_pos = int(min(x_pos, source_frame.shape[1]-w))
 
         y = y_pos
 
         roi_frame = source_frame[y:y+h, x_pos:x_pos+w]
+        if zoom > 1.0:
+            roi_frame = cv2.resize(roi_frame, out_size)
 
         if show_target:
             red = (0,0,255)
@@ -426,13 +428,12 @@ class Processor:
                 if self.active_playback_highlight:
                     camera, current_camera, next_camera = self.active_playback_highlight.get_camera_path().get_camera_at_time(frame_time)
 
-                max_x = int(rotate_point(raw_frame.shape[0:2:1], self.rotation+self.angle_right)[1]) - out_size[0]
-
-                top_of_roi_adjust = np.interp([mouse_x], [0,max_x//2+self.center_x_offset, max_x], [self.top_of_roi_left, 0, self.top_of_roi_right])[0]
-
                 use_live_cam = self.auto_record or self.isPaused() or frame_time > next_camera.time
                 use_live_cam = use_live_cam and not self.active_playback_highlight
                 zoom = self.zoom if use_live_cam else camera.zoom
+                max_x = int(rotate_point(raw_frame.shape[0:2:1], self.rotation+self.angle_right)[1] - roi_size[0] / zoom)
+
+                top_of_roi_adjust = np.interp([mouse_x], [0,max_x//2+self.center_x_offset, max_x], [self.top_of_roi_left, 0, self.top_of_roi_right])[0]
 
                 x = int(np.clip(camera.x, 0, max_x)) # TODO - does this need to be clamped here?
                 frame_y = int(camera.y)
@@ -447,7 +448,7 @@ class Processor:
                 frame = rotate_image(raw_frame, self.rotation+angle)
                 live_y = (clamped_mouse_y - self.top_of_roi + top_of_roi_adjust)
                 frame_y = live_y if use_live_cam else frame_y
-                frame_y = int(rotate_point((frame_x + out_size[0]//2 - frame.shape[1]//2, frame_y), -angle)[1])
+                frame_y = int(rotate_point((frame_x + roi_size[0]//2 - frame.shape[1]//2, frame_y), -angle)[1])
 
 
                 # ------------- cuts / wipes
@@ -534,9 +535,10 @@ class Processor:
                 
                 if not writeOutputFile:
                     # Display the annotated main frame
-                    (w,h) = out_size # This is used for the rectangle drawing below
+                    (w,h) = (int(roi_size[0] / zoom), int(roi_size[1] / zoom)) # This is used for the rectangle drawing below
 
-                    if (not self.auto_record) and next_camera.time >= frame_time:
+                    show_playback_rect = (not self.auto_record) and next_camera.time >= frame_time
+                    if show_playback_rect:
                         blue = (255,0,0)
                         cv2.rectangle(frame, (x,frame_y),(x+w,frame_y+h), blue, 10)
 
@@ -546,16 +548,17 @@ class Processor:
                         cyan = (255,255,0)
                         cv2.rectangle(frame, (hx,frame_y),(hx+w,frame_y+h), cyan, 5)
 
-                    purple = (255,0,200)
-                    red = (55,0,200)
-                    rect_col = purple if self.auto_record else red
-                    cv2.rectangle(frame, (clamped_mouse_x,frame_y),(clamped_mouse_x+w,frame_y+h), rect_col, 10)
-                    cv2.line(frame, (clamped_mouse_x+w//2,frame_y),(clamped_mouse_x+w//2,frame_y+h), rect_col, 1)
-                    cv2.line(frame, (clamped_mouse_x+w//2-50,frame_y+h//2),(clamped_mouse_x+w//2+50,frame_y+h//2), rect_col, 1)
+                    if not show_playback_rect or self.isPaused():
+                        purple = (255,0,200)
+                        red = (55,0,200)
+                        rect_col = purple if self.auto_record else red
+                        cv2.rectangle(frame, (clamped_mouse_x,frame_y),(clamped_mouse_x+w,frame_y+h), rect_col, 10)
+                        cv2.line(frame, (clamped_mouse_x+w//2,frame_y),(clamped_mouse_x+w//2,frame_y+h), rect_col, 1)
+                        cv2.line(frame, (clamped_mouse_x+w//2-50,frame_y+h//2),(clamped_mouse_x+w//2+50,frame_y+h//2), rect_col, 1)
 
                     frame = frame[1200:2800,0:frame.shape[1]]
                     frame = cv2.resize(frame, view_size)
-                    frame = rotate_image_crop(frame, -angle, zoom)
+                    frame = rotate_image_crop(frame, -angle)
 
                     text_y = 100
                     line1 = f"{self.angle_left:.1f} | {self.rotation:.1f} | {self.angle_right:.1f} ({angle:.2f})| "
