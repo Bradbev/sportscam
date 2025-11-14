@@ -13,6 +13,7 @@ from camerapath import CameraPath
 from cameratarget import CameraTarget
 import fastcap
 from highlight import Highlights
+from util import rotate_point
 
 parser = argparse.ArgumentParser()
 parser.add_argument("basepath", help="Base path to begin video processing from")
@@ -27,7 +28,6 @@ writeOutputFile = args.render
 basePath = args.basepath
 preview = True
 iso = args.iso
-angleCam = True
 logo_frames = []
 logo_masks = []
 
@@ -38,18 +38,13 @@ mouse_x = 0
 mouse_y = 0
 mouse_click = False
 
-inputSize = (3840, 2880)
-viewSize = (3340, 1050)
-outSize = (1920,720)
-fullOutSize = (1920, 1080)
+view_size = (3340, 1050)
+out_size = (1920,720)
+full_out_size = (1920, 1080)
 mini_view_size = (400, 400)
-mini_view_rot_size = (300, 180)
+mini_view_rot_size = (350, 180)
 
-diag = int(math.ceil(math.sqrt(outSize[0]**2 + outSize[1]**2))) + 100
-roiCapture = (diag,diag)
-
-if not angleCam:
-    roiCapture = outSize
+roi_size = out_size
 
 def ms_str(ms):
     return str(timedelta(milliseconds=ms)).split(".")[0]
@@ -71,8 +66,8 @@ def rotate_image_crop(img, angle, scale=1.0):
 
 def mouse_callback(event, x, y, flags, param):
     global mouse_x, mouse_y, mouse_click
-    mouse_x = int((x-outSize[0]/2)*2)
-    mouse_y = int((y-outSize[1]/2)*2)
+    mouse_x = int((x-out_size[0]/2)*2)
+    mouse_y = int((y-out_size[1]/2)*2)
     if event == cv2.EVENT_LBUTTONDOWN:
         mouse_click = True
 
@@ -113,13 +108,16 @@ class Processor:
         self.last_auto_time = 0
         self.mini_view_x = 3550
         self.mini_view_y = 2000
-        self.rotation = 25
+        self.rotation = 37
         self.mini_rotation = 8
-        self.top_of_roi = 334
+        self.top_of_roi = -1600
+        self.top_of_roi_left = 0
+        self.top_of_roi_right = 0
         self.had_pickle = False
         self.angle_left = -9
         self.angle_right = 9
-        self.pureFrame = None
+        self.center_x_offset = 0
+        self.last_raw_frame = None
         self.slowmo = False
         self.zoom = 1.0
         self.play_highlights = writeOutputFile
@@ -140,10 +138,13 @@ class Processor:
 
     def load_camera_config_pickle(self, pkl):
         self.top_of_roi = pkl["top_of_roi"]
+        self.top_of_roi_left = pkl["top_of_roi_left"]
+        self.top_of_roi_right = pkl["top_of_roi_right"] 
         self.rotation = pkl["rotation"]
         self.mini_rotation = pkl["mini_rotation"]
         self.angle_left = pkl["angle_left"]
         self.angle_right = pkl["angle_right"]
+        self.center_x_offset = pkl["center_x_offset"]
         self.mini_view_x = pkl["mini_view_x"]
         self.mini_view_y = pkl["mini_view_y"]
 
@@ -151,12 +152,17 @@ class Processor:
         toSave = {
             # Camera config
             "top_of_roi" : self.top_of_roi,
+            "top_of_roi_left" : self.top_of_roi_left,  
+            "top_of_roi_right" : self.top_of_roi_right,
             "rotation" : self.rotation,
             "mini_rotation":self.mini_rotation,
             "angle_left":self.angle_left,
             "angle_right":self.angle_right,
             "mini_view_x": self.mini_view_x, 
             "mini_view_y": self.mini_view_y,
+            "center_x_offset":self.center_x_offset,
+            ### end Camera config
+            
             ### end Camera config
             # per file state
             "camera_path" : self.camera_path,
@@ -246,24 +252,43 @@ class Processor:
         if key == ord('I'):
             self.mini_rotation += 0.2
 
+        if key == ord('x'):
+            self.center_x_offset -= 1
+        if key == ord('X'):
+            self.center_x_offset += 1
+
+        change_left = mouse_x < 500
+        change_right = mouse_x > 3000
+
         if key == ord('u'):
-            if mouse_x < 500:
+            if change_left:
                 self.angle_left = self.angle_left-0.2
-            elif mouse_x > 3000:
+            elif change_right:
                 self.angle_right = self.angle_right-0.2
             else:
                 self.rotation = self.rotation-0.2
         if key == ord('i'):
-            if mouse_x < 500:
+            if change_left:
                 self.angle_left = self.angle_left+0.2
-            elif mouse_x > 3000:
+            elif change_right:
                 self.angle_right = self.angle_right+0.2
             else:
                 self.rotation = self.rotation+0.2
+
         if key == ord('j'):
-            self.top_of_roi = self.top_of_roi-1
+            if change_left:
+                self.top_of_roi_left -= 1
+            elif change_right:
+                self.top_of_roi_right -= 1
+            else:
+                self.top_of_roi = self.top_of_roi-5
         if key == ord('k'):
-            self.top_of_roi = self.top_of_roi+1            
+            if change_left:
+                self.top_of_roi_left += 1
+            elif change_right:
+                self.top_of_roi_right += 1
+            else:
+                self.top_of_roi = self.top_of_roi+5
         
         # Mini-view position
         if key == ord(','): # <
@@ -302,35 +327,38 @@ class Processor:
     def readFrame(self):
         return self.cap.read_frame()
 
+    def capture_mini_view(self, raw_frame):
+        # Capture a 200x200 rectangle from a fixed location in the original frame.
+        mini_view = raw_frame[self.mini_view_y:self.mini_view_y+mini_view_size[1], self.mini_view_x:self.mini_view_x+mini_view_size[0]]
+        mini_view = rotate_image(mini_view, self.rotation+self.mini_rotation)
+        dx,dy=75,130
+        return mini_view[dy:dy+mini_view_rot_size[1],dx:dx+mini_view_rot_size[0]]
+ 
+
     def _create_output_frame(self, source_frame, x_pos, y_pos, max_x, zoom, show_target):
         """Helper function to create the final output frame (cropped, rotated, letterboxed)."""
-        (w,h) = roiCapture
+        (w,h) = roi_size
         x_pos = int(min(x_pos, source_frame.shape[1]-w))
 
-        y = self.top_of_roi * 5 + y_pos
+        y = y_pos
+
         roi_frame = source_frame[y:y+h, x_pos:x_pos+w]
-        out_sized_rotated = None
-        if angleCam:
-            angle = np.interp([x_pos], [0, max_x], [self.angle_left, self.angle_right])[0]
-            y_adjust = int(np.interp([x_pos], [0, max_x/2, max_x], [200,0,200])[0])
-            rotated_frame = rotate_image(roi_frame, angle, zoom)
-            shape = rotated_frame.shape 
-            xr, yr = int(shape[0]/2-outSize[0]/2*zoom), int(shape[1]/2-outSize[1]/2) + y_adjust - int(400*zoom)
-            out_sized_rotated = rotated_frame[yr:yr+outSize[1], xr:xr+outSize[0]]
 
         if show_target:
             red = (0,0,255)
-            rx, ry = int(outSize[0]/2), int(outSize[1]/2)
-            y_off = int(outSize[1]/6)
-            cv2.line(out_sized_rotated, (rx-50,ry),(rx+50,ry), red, 1)
-            cv2.line(out_sized_rotated, (rx,ry-y_off),(rx,ry+y_off), red, 1)
-            cv2.line(out_sized_rotated, (rx-50,ry-y_off),(rx+50,ry-y_off), red, 1)
-            cv2.line(out_sized_rotated, (rx-50,ry+y_off),(rx+50,ry+y_off), red, 1)
+            rx, ry = int(out_size[0]/2), int(out_size[1]/2)
+            y_off = int(out_size[1]/6)
+            cv2.line(roi_frame, (rx-50,ry),(rx+50,ry), red, 1)
+            cv2.line(roi_frame, (rx,ry-y_off),(rx,ry+y_off), red, 1)
+            cv2.line(roi_frame, (rx-50,ry-y_off),(rx+50,ry-y_off), red, 1)
+            cv2.line(roi_frame, (rx-50,ry+y_off),(rx+50,ry+y_off), red, 1)
 
         # Add black bars to make it full HD
-        top_border = (fullOutSize[1] - outSize[1]) // 2
-        bottom_border = fullOutSize[1] - outSize[1] - top_border
-        return cv2.copyMakeBorder(out_sized_rotated, top_border, bottom_border, 0, 0, cv2.BORDER_CONSTANT, value=[0,0,0])
+        top_border = (full_out_size[1] - out_size[1]) // 2
+        bottom_border = full_out_size[1] - out_size[1] - top_border
+        result = cv2.copyMakeBorder(roi_frame, top_border, bottom_border, 0, 0, cv2.BORDER_CONSTANT, value=[0,0,0])
+        #cv2.line(result, (result.shape[1]//2,0),(result.shape[1]//2,result.shape[0]), (255,255,255), 1)
+        return result
 
     def process(self):
         global mouse_x
@@ -343,14 +371,14 @@ class Processor:
         print(f"FPS: {fps}, FrameMS {frame_ms}, Total Video Time: {total_vid_time}")
 
         if writeOutputFile:
-            out = cv2.VideoWriter(path.join(basePath, self.filename+"_processed") + '.mp4', cv2.VideoWriter_fourcc(*"acv1"), fps, fullOutSize)
-            print(f"Rendering to {path.join(basePath, self.filename+"_processed") + '.mp4'} {fullOutSize}")
+            out = cv2.VideoWriter(path.join(basePath, self.filename+"_processed") + '.mp4', cv2.VideoWriter_fourcc(*"acv1"), fps, full_out_size)
+            print(f"Rendering to {path.join(basePath, self.filename+"_processed") + '.mp4'} {full_out_size}")
 
         # Loop through the video frames
         start_time = datetime.now()
         next_print = datetime.now() + timedelta(seconds=5)
         frame_count = 0
-        frame = None
+        raw_frame = None
         success = False
         wipe_index = 100000
         on_wipe_end = None
@@ -368,34 +396,61 @@ class Processor:
             is_wiping = wipe_index < len(logo_frames)
 
             if self.isPaused():
-                frame = self.pureFrame
+                raw_frame = self.last_raw_frame
                 success = True
             elif self.slowmo and frame_count % 3 != 0:
-                frame = self.pureFrame
+                raw_frame = self.last_raw_frame
                 success = True
             else:
-                success, frame = self.readFrame()
+                success, raw_frame = self.readFrame()
 
             if success:
-                self.pureFrame = frame
-                # Capture a 200x200 rectangle from a fixed location in the original frame.
-                # You can adjust the coordinates (e.g., 100, 100) as needed.
-                mini_view = frame[self.mini_view_y:self.mini_view_y+mini_view_size[1], self.mini_view_x:self.mini_view_x+mini_view_size[0]]
-                mini_view = rotate_image(mini_view, self.rotation+self.mini_rotation)
-                dx,dy=75,130
-                mini_view = mini_view[dy:dy+mini_view_rot_size[1],dx:dx+mini_view_rot_size[0]]
-                
+                self.last_raw_frame = raw_frame
                 frame_time = self.cap.get_time()
-                frame = rotate_image(frame, self.rotation)
-
-                # get the normal camera track
+                mini_view = self.capture_mini_view(raw_frame)
+               
+                # get the normal camera path
                 camera, current_camera, next_camera = self.camera_path.get_camera_at_time(frame_time)
                 if not is_wiping and writeOutputFile and current_camera == next_camera:
                     # no more cameras, finish rendering
                     def finish_up():
                         self.finished_rendering = True
                     do_wipe_then(finish_up) 
- 
+
+                # if we are saving a highlight, use the camera path from that highlight
+                saving_highlight = self.highlights.get_active_save_highlight()
+                if saving_highlight is not None:
+                    camera, current_camera, next_camera = saving_highlight.get_camera_path().get_camera_at_time(frame_time)
+               
+                # get the cameras from a playing highlight
+                if self.active_playback_highlight:
+                    camera, current_camera, next_camera = self.active_playback_highlight.get_camera_path().get_camera_at_time(frame_time)
+
+                max_x = int(rotate_point(raw_frame.shape[0:2:1], self.rotation+self.angle_right)[1]) - out_size[0]
+
+                top_of_roi_adjust = np.interp([mouse_x], [0,max_x//2+self.center_x_offset, max_x], [self.top_of_roi_left, 0, self.top_of_roi_right])[0]
+
+                use_live_cam = self.auto_record or self.isPaused() or frame_time > next_camera.time
+                use_live_cam = use_live_cam and not self.active_playback_highlight
+                zoom = self.zoom if use_live_cam else camera.zoom
+
+                x = int(np.clip(camera.x, 0, max_x)) # TODO - does this need to be clamped here?
+                frame_y = int(camera.y)
+                clamped_mouse_x = int(np.clip(mouse_x, 0, max_x))
+                clamped_mouse_y = int(np.clip(mouse_y - 500, -500, 1500))
+
+                frame_x = clamped_mouse_x if use_live_cam else x
+                if zoom == 1.0:
+                   clamped_mouse_y = 0
+
+                angle = np.interp([frame_x], [0,max_x//2+self.center_x_offset, max_x], [self.angle_left, 0, self.angle_right])[0]
+                frame = rotate_image(raw_frame, self.rotation+angle)
+                live_y = (clamped_mouse_y - self.top_of_roi + top_of_roi_adjust)
+                frame_y = live_y if use_live_cam else frame_y
+                frame_y = int(rotate_point((frame_x + out_size[0]//2 - frame.shape[1]//2, frame_y), -angle)[1])
+
+
+                # ------------- cuts / wipes
                 if frame_count == 1:
                     # Jump ahead to the first camera if it's far enough away
                     if current_camera.time - frame_time > 5000:
@@ -411,11 +466,7 @@ class Processor:
                     self.set_time(next_camera.time)
                     continue
 
-                saving_highlight = self.highlights.get_active_save_highlight()
-                if saving_highlight is not None:
-                    camera, current_camera, next_camera = saving_highlight.get_camera_path().get_camera_at_time(frame_time)
-               
-                # highlight start
+               # highlight start
                 if not is_wiping:
                     if self.play_highlights and not saving_highlight and not self.pending_active_playback_highlight:
                         h = self.highlights.get_highlight_by_end_time(frame_time)
@@ -449,36 +500,18 @@ class Processor:
                             self.set_time(cut_to_time)
                         do_wipe_then(jump_to_next_camera)
 
-                if self.active_playback_highlight:
-                    camera, current_camera, next_camera = self.active_playback_highlight.get_camera_path().get_camera_at_time(frame_time)
-
-                use_live_cam = self.auto_record or self.isPaused() or frame_time > next_camera.time
-                use_live_cam = use_live_cam and not self.active_playback_highlight
-                zoom = self.zoom if use_live_cam else camera.zoom
-
-                max_x = (frame.shape[1]-outSize[0]) * zoom
-                x = int(np.clip(camera.x, 0, max_x))
-                y = int(camera.y)
-                clamped_mouse_x = int(np.clip(mouse_x, 0, max_x))
-                clamped_mouse_y = int(np.clip(mouse_y - 500, -500, 1500))
-
-                frame_x = clamped_mouse_x if use_live_cam else x
-                if zoom == 1.0:
-                   clamped_mouse_y = 0
-                frame_y_offset = clamped_mouse_y if use_live_cam else y
-
                 if mouse_click or (self.auto_record and frame_time > self.last_auto_time + 1000):
                     if self.auto_record:
                         self.last_auto_time = frame_time
 
                     if saving_highlight is not None:
-                        saving_highlight.get_camera_path().add_camera_target(CameraTarget(frame_time, x=clamped_mouse_x, y=clamped_mouse_y, zoom=self.zoom))
+                        saving_highlight.get_camera_path().add_camera_target(CameraTarget(frame_time, x=clamped_mouse_x, y=live_y, zoom=self.zoom))
                     else:
-                        self.camera_path.add_camera_target(CameraTarget(frame_time, x=clamped_mouse_x, y=clamped_mouse_y, zoom=self.zoom))
+                        self.camera_path.add_camera_target(CameraTarget(frame_time, x=clamped_mouse_x, y=live_y, zoom=self.zoom))
                     mouse_click = False
 
                 show_target = not writeOutputFile and zoom > 1.0 and (next_camera.time < frame_time or self.paused)
-                outFrame = self._create_output_frame(frame, frame_x, frame_y_offset, max_x, zoom, show_target)
+                outFrame = self._create_output_frame(frame, frame_x, frame_y, max_x, zoom, show_target)
                 # Composite the captured mini-view onto the output frame at (0,0)
                 outFrame[0:mini_view_rot_size[1], 0:mini_view_rot_size[0]] = mini_view
 
@@ -501,45 +534,45 @@ class Processor:
                 
                 if not writeOutputFile:
                     # Display the annotated main frame
-                    text_y = 1550
-                    line1 = f"{self.angle_left:.1f} | {self.rotation:.1f} | {self.angle_right:.1f} | "
+                    (w,h) = out_size # This is used for the rectangle drawing below
+
+                    if (not self.auto_record) and next_camera.time >= frame_time:
+                        blue = (255,0,0)
+                        cv2.rectangle(frame, (x,frame_y),(x+w,frame_y+h), blue, 10)
+
+                    if self.active_playback_highlight is not None:
+                        highlight_cam,_,_ = self.active_playback_highlight.get_camera_path().get_camera_at_time(frame_time)
+                        hx = int(np.clip(highlight_cam.x, 0, max_x))
+                        cyan = (255,255,0)
+                        cv2.rectangle(frame, (hx,frame_y),(hx+w,frame_y+h), cyan, 5)
+
+                    purple = (255,0,200)
+                    red = (55,0,200)
+                    rect_col = purple if self.auto_record else red
+                    cv2.rectangle(frame, (clamped_mouse_x,frame_y),(clamped_mouse_x+w,frame_y+h), rect_col, 10)
+                    cv2.line(frame, (clamped_mouse_x+w//2,frame_y),(clamped_mouse_x+w//2,frame_y+h), rect_col, 1)
+                    cv2.line(frame, (clamped_mouse_x+w//2-50,frame_y+h//2),(clamped_mouse_x+w//2+50,frame_y+h//2), rect_col, 1)
+
+                    frame = frame[1200:2800,0:frame.shape[1]]
+                    frame = cv2.resize(frame, view_size)
+                    frame = rotate_image_crop(frame, -angle, zoom)
+
+                    text_y = 100
+                    line1 = f"{self.angle_left:.1f} | {self.rotation:.1f} | {self.angle_right:.1f} ({angle:.2f})| "
                     line1 += f"{self.camera_path.to_string(frame_time)} @ {ms_str(next_camera.time)} {len(self.highlights.get_highlights())} highlights"
                     if saving_highlight is not None:
                         line1 += f" Saving Highlight {saving_highlight.get_camera_path().to_string(frame_time)}"
                     if current_camera.cut_to:
                         line1 += " * IN CAMERA CUT *"
-                    cv2.putText(frame, line1, (0,text_y), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (0,255,0), 4)
+                    cv2.putText(frame, line1, (0,text_y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,255,0), 2)
 
                     line2 = f"{ms_str(frame_time)} / {ms_str(total_vid_time)} Cap({self.cap.get_cap_index()}) {"Auto" if self.auto_record else ""} Zoom: {zoom:.1f}"
                     if self.play_highlights:
                         line2 += " will play highlights"
                     if self.highlights.get_highlight_at_time(frame_time):
                         line2 += " in highlight"
-                    cv2.putText(frame, line2, (0,text_y+100), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (0,255,0), 4)
+                    cv2.putText(frame, line2, (0,text_y+100), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,255,0), 2)
 
-                    (w,h) = outSize # This is used for the rectangle drawing below
-                    y = self.top_of_roi*5
-                    if angleCam:
-                        y = y + int(720/2)
-
-                    if (not self.auto_record) and next_camera.time >= frame_time:
-                        blue = (255,0,0)
-                        cv2.rectangle(frame, (x,y),(x+w,y+h), blue, 10)
-
-                    if self.active_playback_highlight is not None:
-                        highlight_cam,_,_ = self.active_playback_highlight.get_camera_path().get_camera_at_time(frame_time)
-                        hx = int(np.clip(highlight_cam.x, 0, max_x))
-                        cyan = (255,255,0)
-                        cv2.rectangle(frame, (hx,y),(hx+w,y+h), cyan, 5)
-
-                    purple = (255,0,200)
-                    red = (55,0,200)
-                    rect_col = purple if self.auto_record else red
-                    cv2.rectangle(frame, (clamped_mouse_x,y),(clamped_mouse_x+w,y+h), rect_col, 10)
-                    cv2.line(frame, (clamped_mouse_x+w//2,y),(clamped_mouse_x+w//2,y+h), rect_col, 1)
-
-                    frame = frame[1500:3200,0:frame.shape[1]]
-                    frame = cv2.resize(frame, viewSize)
 
                     cv2.imshow('frame',frame)
 
@@ -570,7 +603,7 @@ def load_logo():
         success, frame = cap.read_frame()
         if not success:
             break
-        frame = cv2.resize(frame, fullOutSize)
+        frame = cv2.resize(frame, full_out_size)
         logo_frames.append(frame)
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         lower = np.array([153,15,85])
