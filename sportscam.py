@@ -13,7 +13,7 @@ from camerapath import CameraPath
 from cameratarget import CameraTarget
 import fastcap
 from highlight import Highlights
-from util import rotate_point
+from util import rotate_image, rotate_image_crop, rotate_point
 
 parser = argparse.ArgumentParser()
 parser.add_argument("basepath", help="Base path to begin video processing from")
@@ -30,6 +30,7 @@ preview = True
 iso = args.iso
 logo_frames = []
 logo_masks = []
+logo_player = None
 
 def scale(sz, s=0.25):
     return (int(sz[0]*s),int(sz[1]*s))
@@ -48,21 +49,6 @@ roi_size = out_size
 
 def ms_str(ms):
     return str(timedelta(milliseconds=ms)).split(".")[0]
-
-def rotate_image(img, angle, scale=1.0):
-    size_reverse = np.array(img.shape[1::-1]) # swap x with y
-    M = cv2.getRotationMatrix2D(tuple(size_reverse / 2.), angle, scale)
-    MM = np.absolute(M[:,:2])
-    size_new = MM @ size_reverse
-    M[:,-1] += (size_new - size_reverse) / 2.
-    return cv2.warpAffine(img, M, tuple(size_new.astype(int)))
-
-def rotate_image_crop(img, angle, scale=1.0):
-    rows, cols, _ = img.shape
-    center = (cols // 2, rows // 2)
-    # Get the 2D rotation matrix
-    M = cv2.getRotationMatrix2D(center, angle, scale)
-    return cv2.warpAffine(img, M, (cols, rows))
 
 def mouse_callback(event, x, y, flags, param):
     global mouse_x, mouse_y, mouse_click
@@ -174,7 +160,6 @@ class Processor:
         }
         save_pkl(self.filename+'.pkl', toSave)
 
-
     def set_time(self, time):
         self.auto_record = False
         self.cap.set_time(time)
@@ -246,12 +231,7 @@ class Processor:
         if key == ord('s'):
             self.slowmo = not self.slowmo
 
-        # Rotation and height
-        if key == ord('U'):
-            self.mini_rotation -= 0.2
-        if key == ord('I'):
-            self.mini_rotation += 0.2
-
+		# Center offset adjust
         if key == ord('x'):
             self.center_x_offset -= 1
         if key == ord('X'):
@@ -299,6 +279,10 @@ class Processor:
             self.mini_view_y -= 1
         if key == ord('m'):
             self.mini_view_y += 1
+        if key == ord('U'):
+            self.mini_rotation -= 0.2
+        if key == ord('I'):
+            self.mini_rotation += 0.2
 
         # Time and recording controls
         if key == ord('a'):
@@ -597,6 +581,8 @@ class Processor:
         return finished
 
 def load_logo():
+    global logo_player
+    logo_player = logo_player.LogoPlayer(args.logo)
     global logo_frames
     global logo_masks
     if args.logo is None:
@@ -619,7 +605,7 @@ def show_logo():
     raw_files = glob.glob(path.join(basePath, "*.mp4"))
     if len(raw_files) == 0:
         return
-    cap2 = fastcap.FastCap(raw_files[0])
+    cap2 = fastcap.FastCap(raw_files)
     
     for i,logo in enumerate(logo_frames):
         inverted_mask=logo_masks[i]
@@ -628,6 +614,33 @@ def show_logo():
         _, frame = cap2.read_frame()
         frame = cv2.resize(frame,(1920,1080))
         bf = add_logo_to_frame(frame, i)
+
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
+            break
+
+        cv2.imshow('final', bf)
+
+    cap2.release()
+
+def show_logo2():
+    raw_files = glob.glob(path.join(basePath, "*.mp4"))
+    if len(raw_files) == 0:
+        return
+    cap2 = fastcap.FastCap(raw_files)
+
+    logo_player.add_logo_if_needed()
+
+    running = True
+    def on_done():
+        nonlocal running
+        running = False
+    logo_player.do_wipe_then(on_done)
+    
+    while running:
+        running, frame = cap2.read_frame()
+        frame = cv2.resize(frame,(1920,1080))
+        bf = logo_player.add_logo_to_frame(frame)
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
@@ -647,7 +660,7 @@ def examine_files():
  
 load_logo()
 if args.show_logo:
-    show_logo()
+    show_logo2()
 else:
     examine_files()
 cv2.destroyAllWindows()
