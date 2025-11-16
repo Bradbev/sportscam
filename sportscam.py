@@ -13,6 +13,7 @@ from camerapath import CameraPath
 from cameratarget import CameraTarget
 import fastcap
 from highlight import Highlights
+import logo_player
 from util import rotate_image, rotate_image_crop, rotate_point
 
 parser = argparse.ArgumentParser()
@@ -28,9 +29,7 @@ writeOutputFile = args.render
 basePath = args.basepath
 preview = True
 iso = args.iso
-logo_frames = []
-logo_masks = []
-logo_player = None
+logo_manager = None
 
 def scale(sz, s=0.25):
     return (int(sz[0]*s),int(sz[1]*s))
@@ -70,16 +69,6 @@ def save_pkl(filename, data):
             pickle.dump(data, f)
     except:
         pass
-
-def add_logo_to_frame(frame, logo_index):
-    if len(logo_frames) == 0:
-        return frame
-    logo = logo_frames[logo_index]
-    inverted_mask = logo_masks[logo_index]
-    mask = 255-inverted_mask
-    maskedLogo = cv2.bitwise_and(logo, logo, mask=mask)
-    maskedBack = cv2.bitwise_and(frame, frame, mask=inverted_mask)
-    return cv2.add(maskedBack, maskedLogo)
 
 cv2.namedWindow('frame')
 cv2.setMouseCallback('frame', mouse_callback)
@@ -349,6 +338,7 @@ class Processor:
     def process(self):
         global mouse_x
         global mouse_click
+        global logo_manager
         self.cap = fastcap.FastCap([x + ".mp4" for x in self.filenames])
 
         fps = self.cap.get_fps()
@@ -366,20 +356,9 @@ class Processor:
         frame_count = 0
         raw_frame = None
         success = False
-        wipe_index = 100000
-        on_wipe_end = None
-        is_wiping = False
-        def do_wipe_then(on_done):
-            nonlocal wipe_index
-            nonlocal on_wipe_end
-            nonlocal is_wiping
-            on_wipe_end = on_done
-            wipe_index = 0
-            is_wiping = True
 
         while self.isRunning():
             frame_count = frame_count + 1
-            is_wiping = wipe_index < len(logo_frames)
 
             if self.isPaused():
                 raw_frame = self.last_raw_frame
@@ -397,11 +376,11 @@ class Processor:
                
                 # get the normal camera path
                 camera, current_camera, next_camera = self.camera_path.get_camera_at_time(frame_time)
-                if not is_wiping and writeOutputFile and current_camera == next_camera:
+                if not logo_manager.is_playing() and writeOutputFile and current_camera == next_camera:
                     # no more cameras, finish rendering
                     def finish_up():
                         self.finished_rendering = True
-                    do_wipe_then(finish_up) 
+                    logo_manager.do_wipe_then(finish_up) 
 
                 # if we are saving a highlight, use the camera path from that highlight
                 saving_highlight = self.highlights.get_active_save_highlight()
@@ -452,7 +431,7 @@ class Processor:
                     continue
 
                # highlight start
-                if not is_wiping:
+                if not logo_manager.is_playing():
                     if self.play_highlights and not saving_highlight and not self.pending_active_playback_highlight:
                         h = self.highlights.get_highlight_by_end_time(frame_time)
                         if h is not None:
@@ -462,10 +441,10 @@ class Processor:
                                 self.active_playback_highlight = h
                                 self.slowmo = h.slowmo
                                 self.set_time(h.start_time)
-                            do_wipe_then(start_highlight)
+                            logo_manager.do_wipe_then(start_highlight)
                                 
                 # highlight end
-                if not is_wiping:
+                if not logo_manager.is_playing():
                     if self.active_playback_highlight and frame_time > self.active_playback_highlight.end_time:
                         def end_highlight():
                             _, at_wipe_end_cam, after_wipe_cam = self.camera_path.get_camera_at_time(frame_time)
@@ -474,16 +453,16 @@ class Processor:
                             self.active_playback_highlight = None
                             self.pending_active_playback_highlight = None
                             self.slowmo = False
-                        do_wipe_then(end_highlight)
+                        logo_manager.do_wipe_then(end_highlight)
                 
                 # camera cut
-                if not is_wiping:
+                if not logo_manager.is_playing():
                     next_camera_good = (next_camera.time - frame_time > 2000) or current_camera == next_camera
                     if self.do_camera_cuts and not self.pending_active_playback_highlight and current_camera.cut_to and next_camera_good:
                         cut_to_time = next_camera.time
                         def jump_to_next_camera():
                             self.set_time(cut_to_time)
-                        do_wipe_then(jump_to_next_camera)
+                        logo_manager.do_wipe_then(jump_to_next_camera)
 
                 if mouse_click or (self.auto_record and frame_time > self.last_auto_time + 1000):
                     if self.auto_record:
@@ -496,15 +475,11 @@ class Processor:
                     mouse_click = False
 
                 show_target = not writeOutputFile and zoom > 1.0 and (next_camera.time < frame_time or self.paused)
-                outFrame = self._create_output_frame(frame, frame_x, frame_y, max_x, zoom, show_target)
+                out_frame = self._create_output_frame(frame, frame_x, frame_y, max_x, zoom, show_target)
                 # Composite the captured mini-view onto the output frame at (0,0)
-                outFrame[0:mini_view_rot_size[1], 0:mini_view_rot_size[0]] = mini_view
+                out_frame[0:mini_view_rot_size[1], 0:mini_view_rot_size[0]] = mini_view
 
-                if is_wiping:
-                    outFrame = add_logo_to_frame(outFrame, wipe_index)
-                    wipe_index = wipe_index + 1
-                    if wipe_index >= len(logo_frames) and on_wipe_end:
-                        on_wipe_end()
+                out_frame = logo_manager.add_logo_if_needed(out_frame)
 
                 if writeOutputFile:
                     if datetime.now() > next_print:
@@ -512,10 +487,10 @@ class Processor:
                         print(f"Processed {frame_count} frames in {delta} ({frame_count / delta.seconds} fps)")
                         next_print = datetime.now() + timedelta(seconds=30)
 
-                    out.write(outFrame)
+                    out.write(out_frame)
 
                 if preview:
-                    cv2.imshow('preview',outFrame)
+                    cv2.imshow('preview',out_frame)
                 
                 if not writeOutputFile:
                     # Display the annotated main frame
@@ -581,66 +556,25 @@ class Processor:
         return finished
 
 def load_logo():
-    global logo_player
-    logo_player = logo_player.LogoPlayer(args.logo)
-    global logo_frames
-    global logo_masks
-    if args.logo is None:
-        return
-    cap = fastcap.FastCap([args.logo])
-    while True:
-        success, frame = cap.read_frame()
-        if not success:
-            break
-        frame = cv2.resize(frame, full_out_size)
-        logo_frames.append(frame)
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        lower = np.array([153,15,85])
-        upper = np.array([170,255,255])
-        inverted_mask = cv2.inRange(hsv, lower, upper)
-        logo_masks.append(inverted_mask)
-    cap.release
+    global logo_manager
+    logo_manager = logo_player.LogoPlayer(args.logo, full_out_size=full_out_size)
  
 def show_logo():
     raw_files = glob.glob(path.join(basePath, "*.mp4"))
     if len(raw_files) == 0:
         return
     cap2 = fastcap.FastCap(raw_files)
-    
-    for i,logo in enumerate(logo_frames):
-        inverted_mask=logo_masks[i]
-        mask = 255-inverted_mask
-
-        _, frame = cap2.read_frame()
-        frame = cv2.resize(frame,(1920,1080))
-        bf = add_logo_to_frame(frame, i)
-
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
-            break
-
-        cv2.imshow('final', bf)
-
-    cap2.release()
-
-def show_logo2():
-    raw_files = glob.glob(path.join(basePath, "*.mp4"))
-    if len(raw_files) == 0:
-        return
-    cap2 = fastcap.FastCap(raw_files)
-
-    logo_player.add_logo_if_needed()
 
     running = True
     def on_done():
         nonlocal running
         running = False
-    logo_player.do_wipe_then(on_done)
+    logo_manager.do_wipe_then(on_done)
     
     while running:
         running, frame = cap2.read_frame()
         frame = cv2.resize(frame,(1920,1080))
-        bf = logo_player.add_logo_to_frame(frame)
+        bf = logo_manager.add_logo_if_needed(frame)
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
@@ -660,7 +594,7 @@ def examine_files():
  
 load_logo()
 if args.show_logo:
-    show_logo2()
+    show_logo()
 else:
     examine_files()
 cv2.destroyAllWindows()
