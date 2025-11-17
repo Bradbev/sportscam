@@ -153,6 +153,7 @@ class Processor:
         self.auto_record = False
         self.cap.set_time(time)
         self.last_auto_time = 0
+        self.last_raw_frame = None
 
     def skip_time(self, delta):
         time = self.cap.get_time()
@@ -360,7 +361,7 @@ class Processor:
         while self.isRunning():
             frame_count = frame_count + 1
 
-            if self.isPaused():
+            if self.isPaused() and self.last_raw_frame is not None:
                 raw_frame = self.last_raw_frame
                 success = True
             elif self.slowmo and frame_count % 3 != 0:
@@ -376,16 +377,17 @@ class Processor:
                
                 # get the normal camera path
                 camera, current_camera, next_camera = self.camera_path.get_camera_at_time(frame_time)
-                if not logo_manager.is_playing() and writeOutputFile and current_camera == next_camera:
+                no_future_cameras = current_camera == next_camera
+                if not logo_manager.is_playing() and writeOutputFile and no_future_cameras:
                     # no more cameras, finish rendering
                     def finish_up():
                         self.finished_rendering = True
                     logo_manager.do_wipe_then(finish_up) 
 
                 # if we are saving a highlight, use the camera path from that highlight
-                saving_highlight = self.highlights.get_active_save_highlight()
-                if saving_highlight is not None:
-                    camera, current_camera, next_camera = saving_highlight.get_camera_path().get_camera_at_time(frame_time)
+                active_save_highlight = self.highlights.get_active_save_highlight()
+                if active_save_highlight is not None:
+                    camera, current_camera, next_camera = active_save_highlight.get_camera_path().get_camera_at_time(frame_time)
                
                 # get the cameras from a playing highlight
                 if self.active_playback_highlight:
@@ -432,7 +434,7 @@ class Processor:
 
                # highlight start
                 if not logo_manager.is_playing():
-                    if self.play_highlights and not saving_highlight and not self.pending_active_playback_highlight:
+                    if self.play_highlights and not active_save_highlight and not self.pending_active_playback_highlight:
                         h = self.highlights.get_highlight_by_end_time(frame_time)
                         if h is not None:
                             self.pending_active_playback_highlight = h
@@ -457,7 +459,7 @@ class Processor:
                 
                 # camera cut
                 if not logo_manager.is_playing():
-                    next_camera_good = (next_camera.time - frame_time > 2000) or current_camera == next_camera
+                    next_camera_good = (next_camera.time - frame_time > 2000) # or no_future_cameras # this OR makes no sense......
                     if self.do_camera_cuts and not self.pending_active_playback_highlight and current_camera.cut_to and next_camera_good:
                         cut_to_time = next_camera.time
                         def jump_to_next_camera():
@@ -468,8 +470,8 @@ class Processor:
                     if self.auto_record:
                         self.last_auto_time = frame_time
 
-                    if saving_highlight is not None:
-                        saving_highlight.get_camera_path().add_camera_target(CameraTarget(frame_time, x=clamped_mouse_x, y=live_y, zoom=self.zoom))
+                    if active_save_highlight is not None:
+                        active_save_highlight.get_camera_path().add_camera_target(CameraTarget(frame_time, x=clamped_mouse_x, y=live_y, zoom=self.zoom))
                     else:
                         self.camera_path.add_camera_target(CameraTarget(frame_time, x=clamped_mouse_x, y=live_y, zoom=self.zoom))
                     mouse_click = False
@@ -496,25 +498,27 @@ class Processor:
                     # Display the annotated main frame
                     (w,h) = (int(roi_size[0] / zoom), int(roi_size[1] / zoom)) # This is used for the rectangle drawing below
 
+                    def draw_target_rect(frame, x, y, color):
+                        cv2.rectangle(frame, (x,y),(x+w,y+h), color, 10)
+                        cv2.line(frame, (x+w//2,y),(x+w//2,y+h), color, 1)
+                        cv2.line(frame, (x+w//2-50,y+h//2),(x+w//2+50,y+h//2), color, 1)
+
                     show_playback_rect = (not self.auto_record) and next_camera.time >= frame_time
                     if show_playback_rect:
                         blue = (255,0,0)
-                        cv2.rectangle(frame, (x,frame_y),(x+w,frame_y+h), blue, 10)
+                        draw_target_rect(frame, x,frame_y, blue)
 
                     if self.active_playback_highlight is not None:
                         highlight_cam,_,_ = self.active_playback_highlight.get_camera_path().get_camera_at_time(frame_time)
-                        hx = int(np.clip(highlight_cam.x, 0, max_x))
                         cyan = (255,255,0)
-                        cv2.rectangle(frame, (hx,frame_y),(hx+w,frame_y+h), cyan, 5)
+                        draw_target_rect(frame, int(highlight_cam.x),frame_y, cyan)
 
                     if not show_playback_rect or self.isPaused():
-                        purple = (255,0,200)
-                        red = (55,0,200)
+                        purple,red = (255,0,200),(55,0,200)
                         rect_col = purple if self.auto_record else red
-                        cv2.rectangle(frame, (clamped_mouse_x,frame_y),(clamped_mouse_x+w,frame_y+h), rect_col, 10)
-                        cv2.line(frame, (clamped_mouse_x+w//2,frame_y),(clamped_mouse_x+w//2,frame_y+h), rect_col, 1)
-                        cv2.line(frame, (clamped_mouse_x+w//2-50,frame_y+h//2),(clamped_mouse_x+w//2+50,frame_y+h//2), rect_col, 1)
+                        draw_target_rect(frame, clamped_mouse_x,frame_y, rect_col)
 
+                    # reshape and rotate the large window back so it has stable rotation
                     frame = frame[1200:2800,0:frame.shape[1]]
                     frame = cv2.resize(frame, view_size)
                     frame = rotate_image_crop(frame, -angle)
@@ -522,8 +526,8 @@ class Processor:
                     text_y = 100
                     line1 = f"{self.angle_left:.1f} | {self.rotation:.1f} | {self.angle_right:.1f} ({angle:.2f})| "
                     line1 += f"{self.camera_path.to_string(frame_time)} @ {ms_str(next_camera.time)} {len(self.highlights.get_highlights())} highlights"
-                    if saving_highlight is not None:
-                        line1 += f" Saving Highlight {saving_highlight.get_camera_path().to_string(frame_time)}"
+                    if active_save_highlight is not None:
+                        line1 += f" Saving Highlight {active_save_highlight.get_camera_path().to_string(frame_time)}"
                     if current_camera.cut_to:
                         line1 += " * IN CAMERA CUT *"
                     cv2.putText(frame, line1, (0,text_y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,255,0), 2)
