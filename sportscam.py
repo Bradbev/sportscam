@@ -23,10 +23,12 @@ parser.add_argument("-ns", "--no-skip", action="store_true", help="Don't skip fi
 parser.add_argument("-i", "--iso", action="store_true", help="When ISO is active, skip forward to the next camera shot if the gap is > 30s")
 parser.add_argument("--logo", type=str, help="Logo screen wipe")
 parser.add_argument("--show-logo", action="store_true", help="Only show logo")
+parser.add_argument("--pos", action="store_true", help="Show posession")
 args = parser.parse_args()
 
 writeOutputFile = args.render
 basePath = args.basepath
+show_posession = args.pos
 preview = True
 iso = args.iso
 logo_manager = None
@@ -47,7 +49,12 @@ mini_view_rot_size = (350, 180)
 roi_size = out_size
 
 def ms_str(ms):
-    return str(timedelta(milliseconds=ms)).split(".")[0]
+    h,m,s = str(timedelta(milliseconds=ms)).split(".")[0].split(":")
+    if m.startswith("0"):
+        m = m[1:]
+    if h != "0":
+        return f"{h}h{m}m{s}s"
+    return f"{m}m{s}s"
 
 def mouse_callback(event, x, y, flags, param):
     global mouse_x, mouse_y, mouse_click
@@ -83,6 +90,8 @@ class Processor:
         self.last_auto_time = 0
         self.mini_view_x = 3550
         self.mini_view_y = 2000
+        self.zone_left = 720
+        self.zone_right = 2048
         self.rotation = 37
         self.mini_rotation = 8
         self.top_of_roi = -1600
@@ -93,13 +102,17 @@ class Processor:
         self.angle_right = 9
         self.center_x_offset = 0
         self.last_raw_frame = None
+        self.last_frame_time = 0
         self.slowmo = False
+        self.fastmo = False
         self.zoom = 1.0
         self.play_highlights = writeOutputFile
         self.do_camera_cuts = writeOutputFile
         self.finished_rendering = False
         self.pending_active_playback_highlight = None
         self.active_playback_highlight = None
+        self.period = 1
+        self.score=(-1,-1)
         loaded = load_pkl(self.filename + '.pkl')
         self.camera_path = CameraPath()
         self.highlights = Highlights()
@@ -122,6 +135,9 @@ class Processor:
         self.center_x_offset = pkl["center_x_offset"]
         self.mini_view_x = pkl["mini_view_x"]
         self.mini_view_y = pkl["mini_view_y"]
+        self.zone_left = pkl["zone_left"]
+        self.zone_right = pkl["zone_right"]
+        
 
     def save_pickle(self, finished):
         toSave = {
@@ -136,6 +152,8 @@ class Processor:
             "mini_view_x": self.mini_view_x, 
             "mini_view_y": self.mini_view_y,
             "center_x_offset":self.center_x_offset,
+            "zone_left":self.zone_left,
+            "zone_right":self.zone_right,
             ### end Camera config
             
             ### end Camera config
@@ -168,7 +186,47 @@ class Processor:
     def isPaused(self):
         return self.paused
 
+    def calculate_zone_times_seconds(self):
+        left,neutral,right = 0,0,0
+        for c in self.camera_path.camera_targets:
+            if c.time > self.last_frame_time:
+                break
+            # reverse sides in period 2
+            if c.period == 2:
+                if c.x < self.zone_left:
+                    right += 1
+                elif c.x > self.zone_right:
+                    left += 1
+                else:
+                    neutral += 1
+            else:
+                if c.x < self.zone_left:
+                    left += 1
+                elif c.x > self.zone_right:
+                    right += 1
+                else:
+                    neutral += 1
+
+        return (left,neutral,right)
+
     def handleKeys(self, key, frame_time):
+        # Period
+        if key == ord('p'):
+            self.period = self.period + 1
+        if key == ord('P'):
+            self.period = self.period - 1
+
+        # score left
+        if key == ord('['):
+            self.score = (self.score[0]+1, self.score[1])
+        if key == ord('{'):
+            self.score = (self.score[0]-1, self.score[1])
+        # score right
+        if key == ord(']'):
+            self.score = (self.score[0], self.score[1]+1)
+        if key == ord('}'):
+            self.score = (self.score[0], self.score[1]-1)
+
         #zoom 
         if key == ord('z'):
             self.zoom = min(3.0, self.zoom + 0.1)
@@ -220,6 +278,10 @@ class Processor:
 
         if key == ord('s'):
             self.slowmo = not self.slowmo
+            self.fastmo = False
+        if key == ord('f'):
+            self.fastmo = not self.fastmo
+            self.slowmo = False
 
 		# Center offset adjust
         if key == ord('x'):
@@ -229,6 +291,12 @@ class Processor:
 
         change_left = mouse_x < 500
         change_right = mouse_x > 3000
+
+        if key == ord('o'):
+            if mouse_x < 1500:
+                self.zone_left = mouse_x
+            else:
+                self.zone_right = mouse_x
 
         if key == ord('u'):
             if change_left:
@@ -309,7 +377,7 @@ class Processor:
         return mini_view[dy:dy+mini_view_rot_size[1],dx:dx+mini_view_rot_size[0]]
  
 
-    def _create_output_frame(self, source_frame, x_pos, y_pos, max_x, zoom, show_target):
+    def _create_output_frame(self, source_frame, x_pos, y_pos, zoom, show_target):
         """Helper function to create the final output frame (cropped, rotated, letterboxed)."""
         (w,h) = (int(roi_size[0] / zoom), int(roi_size[1] / zoom))
         x_pos = int(min(x_pos, source_frame.shape[1]-w))
@@ -335,6 +403,24 @@ class Processor:
         result = cv2.copyMakeBorder(roi_frame, top_border, bottom_border, 0, 0, cv2.BORDER_CONSTANT, value=[0,0,0])
         #cv2.line(result, (result.shape[1]//2,0),(result.shape[1]//2,result.shape[0]), (255,255,255), 1)
         return result
+
+    def annotate_ouput_frame(self, out_frame):
+        # add on the score info
+        if self.score[0] > -1:
+            period = f"Period   {self.period}"
+            cv2.putText(out_frame, period, (400,50), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (215,215,215), 3)
+            score_text = f"Score  {self.score[0]}-{self.score[1]}"
+            cv2.putText(out_frame, score_text, (400,100), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (225,225,225), 3)
+
+        # add posession info
+        if show_posession:
+            l,n,r = self.calculate_zone_times_seconds()
+            names = f"  Left  | Neutral | Right: "
+            cv2.putText(out_frame, names, (1200,50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (215,215,215), 2)
+            times = f"{ms_str(l*1000)} | {ms_str(n*1000)} | {ms_str(r*1000)}"
+            cv2.putText(out_frame, times, (1200,100), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (215,215,215), 2)
+
+
 
     def process(self):
         global mouse_x
@@ -369,15 +455,24 @@ class Processor:
                 success = True
             else:
                 success, raw_frame = self.readFrame()
+            
+            # just read two frames for fastmo
+            if self.fastmo and frame_count % 2 != 0:
+                success, raw_frame = self.readFrame()
 
             if success:
                 self.last_raw_frame = raw_frame
                 frame_time = self.cap.get_time()
+                self.last_frame_time = frame_time
                 mini_view = self.capture_mini_view(raw_frame)
                
                 # get the normal camera path
                 camera, current_camera, next_camera = self.camera_path.get_camera_at_time(frame_time)
                 no_future_cameras = current_camera == next_camera
+                if not no_future_cameras:
+                    self.period = next_camera.period
+                    self.score = next_camera.score
+
                 if not logo_manager.is_playing() and writeOutputFile and no_future_cameras:
                     # no more cameras, finish rendering
                     def finish_up():
@@ -470,17 +565,19 @@ class Processor:
                     if self.auto_record:
                         self.last_auto_time = frame_time
 
+                    new_target = CameraTarget(frame_time, x=clamped_mouse_x, y=live_y, zoom=self.zoom, score=self.score, period=self.period)
                     if active_save_highlight is not None:
-                        active_save_highlight.get_camera_path().add_camera_target(CameraTarget(frame_time, x=clamped_mouse_x, y=live_y, zoom=self.zoom))
+                        active_save_highlight.get_camera_path().add_camera_target(new_target)
                     else:
-                        self.camera_path.add_camera_target(CameraTarget(frame_time, x=clamped_mouse_x, y=live_y, zoom=self.zoom))
+                        self.camera_path.add_camera_target(new_target)
                     mouse_click = False
 
                 show_target = not writeOutputFile and zoom > 1.0 and (next_camera.time < frame_time or self.paused)
-                out_frame = self._create_output_frame(frame, frame_x, frame_y, max_x, zoom, show_target)
+                out_frame = self._create_output_frame(frame, frame_x, frame_y, zoom, show_target)
                 # Composite the captured mini-view onto the output frame at (0,0)
                 out_frame[0:mini_view_rot_size[1], 0:mini_view_rot_size[0]] = mini_view
 
+                self.annotate_ouput_frame(out_frame)
                 out_frame = logo_manager.add_logo_if_needed(out_frame)
 
                 if writeOutputFile:
@@ -513,19 +610,22 @@ class Processor:
                         cyan = (255,255,0)
                         draw_target_rect(frame, int(highlight_cam.x),frame_y, cyan)
 
-                    if not show_playback_rect or self.isPaused():
-                        purple,red = (255,0,200),(55,0,200)
-                        rect_col = purple if self.auto_record else red
-                        draw_target_rect(frame, clamped_mouse_x,frame_y, rect_col)
+                    purple,red = (255,0,200),(55,0,200)
+                    rect_col = purple if self.auto_record else red
+                    draw_target_rect(frame, clamped_mouse_x,frame_y, rect_col)
+
+                    if len(self.camera_path.camera_targets) == 1:
+                        cv2.line(frame, (self.zone_left+w//2,0),(self.zone_left+w//2,frame.shape[0]), (255,255,255), 1)
+                        cv2.line(frame, (self.zone_right+w//2,0),(self.zone_right+w//2,frame.shape[0]), (255,255,255), 1)
 
                     # reshape and rotate the large window back so it has stable rotation
                     frame = frame[1200:2800,0:frame.shape[1]]
                     frame = cv2.resize(frame, view_size)
                     frame = rotate_image_crop(frame, -angle)
 
-                    text_y = 100
+                    text_y = 30
                     line1 = f"{self.angle_left:.1f} | {self.rotation:.1f} | {self.angle_right:.1f} ({angle:.2f})| "
-                    line1 += f"{self.camera_path.to_string(frame_time)} @ {ms_str(next_camera.time)} {len(self.highlights.get_highlights())} highlights"
+                    line1 += f"{self.camera_path.to_string(frame_time)} @ {ms_str(next_camera.time)} P:{self.period} {len(self.highlights.get_highlights())} highlights"
                     if active_save_highlight is not None:
                         line1 += f" Saving Highlight {active_save_highlight.get_camera_path().to_string(frame_time)}"
                     if current_camera.cut_to:
@@ -537,8 +637,11 @@ class Processor:
                         line2 += " will play highlights"
                     if self.highlights.get_highlight_at_time(frame_time):
                         line2 += " in highlight"
-                    cv2.putText(frame, line2, (0,text_y+100), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,255,0), 2)
+                    cv2.putText(frame, line2, (0,text_y+50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,255,0), 2)
 
+                    left,neutral,right = self.calculate_zone_times_seconds()
+                    line3 = f"{ms_str(left*1000)} | {ms_str(neutral*1000)} | {ms_str(right*1000)}"
+                    cv2.putText(frame, line3, (0,text_y+50*2), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,255,0), 2)
 
                     cv2.imshow('frame',frame)
 
