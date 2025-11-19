@@ -6,7 +6,7 @@ Activate with `venv\scripts\activate`
 Install with `pip install -r requirements.txt`
 
 # BUGS
-* Camera cuts don't work across file boundaries. 
 
 # Future features
-* Zoom
+* Refactor game state into its own class.  CameraTargets will store that
+* Add shot count / blocked shots?
