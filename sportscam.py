@@ -461,6 +461,10 @@ class Processor:
                 success, raw_frame = self.readFrame()
 
             if success:
+                if raw_frame is None:
+                    print("This should never happen.  But it has.")
+                    continue
+
                 self.last_raw_frame = raw_frame
                 frame_time = self.cap.get_time()
                 self.last_frame_time = frame_time
