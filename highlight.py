@@ -45,7 +45,6 @@ class Highlights:
     def abort_highlight(self):
         self.active_save_highlight = None
 
-
     def get_highlights(self):
         return self.highlights
 
@@ -71,8 +70,6 @@ class Highlights:
         for highlight in self.highlights:
             if highlight.start_time > time:
                 return highlight
-
-   
 
     def delete_at_time(self, time):
         for highlight in self.highlights:

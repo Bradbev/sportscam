@@ -11,6 +11,9 @@ class LogoPlayer:
 		self._index = 0
 		self._on_wipe_end = None
 
+		if path is None:
+			return
+
 		cap = fastcap.FastCap([path])
 		while True:
 			success, frame = cap.read_frame()
@@ -35,7 +38,7 @@ class LogoPlayer:
 		inverted_mask = self._masks[self._index]
 		self._index += 1
 
-		if self._index >= len(self._frames) and self._on_wipe_end:
+		if self._index >= len(self._frames) and self._on_wipe_end is not None:
 			self._on_wipe_end()
 			self._is_playing = False
 			self._index = 0
@@ -46,5 +49,9 @@ class LogoPlayer:
 		return cv2.add(maskedBack, maskedLogo)
 
 	def do_wipe_then(self, on_wipe_end):
+		if len(self._frames) == 0:
+			if on_wipe_end is not None:
+				on_wipe_end()
+			return
 		self._on_wipe_end = on_wipe_end
 		self._is_playing = True

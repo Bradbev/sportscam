@@ -12,6 +12,7 @@ import argparse
 from camerapath import CameraPath
 from cameratarget import CameraTarget
 import fastcap
+import gamestate
 from highlight import Highlights
 import logo_player
 from util import rotate_image, rotate_image_crop, rotate_point
@@ -38,7 +39,9 @@ def scale(sz, s=0.25):
 
 mouse_x = 0
 mouse_y = 0
-mouse_click = False
+mouse_left_click = False
+mouse_right_click = False
+mouse_middle_click = False
 
 view_size = (3340, 1050)
 out_size = (1920,720)
@@ -57,11 +60,16 @@ def ms_str(ms):
     return f"{m}m{s}s"
 
 def mouse_callback(event, x, y, flags, param):
-    global mouse_x, mouse_y, mouse_click
+    global mouse_x, mouse_y, mouse_left_click, mouse_middle_click, mouse_right_click
     mouse_x = int((x-out_size[0]/2)*2)
     mouse_y = int((y-out_size[1]/2)*2)
-    if event == cv2.EVENT_LBUTTONDOWN:
-        mouse_click = True
+    match event:
+        case cv2.EVENT_LBUTTONDOWN:
+            mouse_left_click = True
+        case cv2.EVENT_MBUTTONDOWN:
+            mouse_middle_click = True
+        case cv2.EVENT_RBUTTONDOWN:
+            mouse_right_click = True
 
 def load_pkl(filename):
     try:
@@ -111,8 +119,7 @@ class Processor:
         self.finished_rendering = False
         self.pending_active_playback_highlight = None
         self.active_playback_highlight = None
-        self.period = 1
-        self.score=(-1,-1)
+        self.game_state = gamestate.GameState()
         loaded = load_pkl(self.filename + '.pkl')
         self.camera_path = CameraPath()
         self.highlights = Highlights()
@@ -186,24 +193,26 @@ class Processor:
     def isPaused(self):
         return self.paused
 
+    # No special state needs to be kept for zone times, we calculate it 
+    # from camera position
     def calculate_zone_times_seconds(self):
         left,neutral,right = 0,0,0
         for c in self.camera_path.camera_targets:
             if c.time > self.last_frame_time:
                 break
             # reverse sides in period 2
-            if c.period == 2:
+            if c.game_state.period == 2:
                 if c.x < self.zone_left:
-                    right += 1
-                elif c.x > self.zone_right:
                     left += 1
+                elif c.x > self.zone_right:
+                    right += 1
                 else:
                     neutral += 1
             else:
                 if c.x < self.zone_left:
-                    left += 1
-                elif c.x > self.zone_right:
                     right += 1
+                elif c.x > self.zone_right:
+                    left += 1
                 else:
                     neutral += 1
 
@@ -212,20 +221,20 @@ class Processor:
     def handleKeys(self, key, frame_time):
         # Period
         if key == ord('p'):
-            self.period = self.period + 1
+            self.game_state.period = self.game_state.period + 1
         if key == ord('P'):
-            self.period = self.period - 1
+            self.game_state.period = self.game_state.period - 1
 
         # score left
         if key == ord('['):
-            self.score = (self.score[0]+1, self.score[1])
+            self.game_state.adjust_score((1, 0))
         if key == ord('{'):
-            self.score = (self.score[0]-1, self.score[1])
+            self.game_state.adjust_score((-1, 0))
         # score right
         if key == ord(']'):
-            self.score = (self.score[0], self.score[1]+1)
+            self.game_state.adjust_score((0, 1))
         if key == ord('}'):
-            self.score = (self.score[0], self.score[1]-1)
+            self.game_state.adjust_score((0, -1))
 
         #zoom 
         if key == ord('z'):
@@ -251,7 +260,7 @@ class Processor:
                 if len(self.highlights.get_active_save_highlight().get_camera_path().camera_targets) > 0:
                     ct = self.highlights.get_active_save_highlight().get_camera_path().camera_targets[-1]
                     self.camera_path.truncate_path_to_time(frame_time)
-                    self.camera_path.add_camera_target(CameraTarget(frame_time+1000, ct.x, ct.y, cut_to=True, zoom=1.0))
+                    self.camera_path.add_camera_target(CameraTarget(frame_time+1000, ct.x, ct.y, cut_to=True, zoom=1.0, game_state=self.game_state))
                     self.highlights.stop_highlight(frame_time, self.slowmo)
                 else:
                     self.highlights.abort_highlight()
@@ -355,6 +364,8 @@ class Processor:
             self.skip_time(1000 * 9)
         if key == ord('4'):
             self.skip_time(1000 * 60)
+        if key == ord('5'):
+            self.skip_time(1000 * 60 * 5)
 
         # Camera controls
         if self.camera_path.has_targets():
@@ -406,25 +417,29 @@ class Processor:
 
     def annotate_ouput_frame(self, out_frame):
         # add on the score info
-        if self.score[0] > -1:
-            period = f"Period   {self.period}"
-            cv2.putText(out_frame, period, (400,50), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (215,215,215), 3)
-            score_text = f"Score  {self.score[0]}-{self.score[1]}"
-            cv2.putText(out_frame, score_text, (400,100), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (225,225,225), 3)
+        if writeOutputFile and not show_posession:
+            return
+
+        period = f"Period   {self.game_state.period}"
+        cv2.putText(out_frame, period, (400,50), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (215,215,215), 3)
+        score_text = f"Score  {self.game_state.score[0]}-{self.game_state.score[1]}"
+        cv2.putText(out_frame, score_text, (400,100), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (225,225,225), 3)
+    
+        score_text = f"Shots  {self.game_state.shots[0]}-{self.game_state.shots[1]}"
+        cv2.putText(out_frame, score_text, (400,150), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (225,225,225), 3)
 
         # add posession info
-        if show_posession:
-            l,n,r = self.calculate_zone_times_seconds()
-            names = f"  Left  | Neutral | Right: "
-            cv2.putText(out_frame, names, (1200,50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (215,215,215), 2)
-            times = f"{ms_str(l*1000)} | {ms_str(n*1000)} | {ms_str(r*1000)}"
-            cv2.putText(out_frame, times, (1200,100), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (215,215,215), 2)
+        l,n,r = self.calculate_zone_times_seconds()
+        names = f"  Left  | Neutral | Right: (Ozone time, bench side)"
+        cv2.putText(out_frame, names, (1200,50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (215,215,215), 2)
+        times = f"{ms_str(l*1000)} | {ms_str(n*1000)} | {ms_str(r*1000)}"
+        cv2.putText(out_frame, times, (1200,100), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (215,215,215), 2)
 
 
 
     def process(self):
         global mouse_x
-        global mouse_click
+        global mouse_left_click, mouse_middle_click, mouse_right_click
         global logo_manager
         self.cap = fastcap.FastCap([x + ".mp4" for x in self.filenames])
 
@@ -455,10 +470,9 @@ class Processor:
                 success = True
             else:
                 success, raw_frame = self.readFrame()
-            
-            # just read two frames for fastmo
-            if self.fastmo and frame_count % 2 != 0:
-                success, raw_frame = self.readFrame()
+                # just read two frames for fastmo
+                if self.fastmo:
+                    success, raw_frame = self.readFrame()
 
             if success:
                 if raw_frame is None:
@@ -474,8 +488,7 @@ class Processor:
                 camera, current_camera, next_camera = self.camera_path.get_camera_at_time(frame_time)
                 no_future_cameras = current_camera == next_camera
                 if not no_future_cameras:
-                    self.period = next_camera.period
-                    self.score = next_camera.score
+                    self.game_state = next_camera.game_state.copy()
 
                 if not logo_manager.is_playing() and writeOutputFile and no_future_cameras:
                     # no more cameras, finish rendering
@@ -565,16 +578,25 @@ class Processor:
                             self.set_time(cut_to_time)
                         logo_manager.do_wipe_then(jump_to_next_camera)
 
+                mouse_click = mouse_left_click or mouse_right_click
                 if mouse_click or (self.auto_record and frame_time > self.last_auto_time + 1000):
+                    attribute_to_left_team = clamped_mouse_x > (max_x//2 + self.center_x_offset)
+                    if mouse_right_click:
+                        self.game_state.adjust_shots((1,0) if attribute_to_left_team else (0,1))
+                    if mouse_middle_click:
+                        self.game_state.adjust_score((1,0) if attribute_to_left_team else (0,1))
+
                     if self.auto_record:
                         self.last_auto_time = frame_time
 
-                    new_target = CameraTarget(frame_time, x=clamped_mouse_x, y=live_y, zoom=self.zoom, score=self.score, period=self.period)
+                    new_target = CameraTarget(frame_time, x=clamped_mouse_x, y=live_y, zoom=self.zoom, game_state=self.game_state)
                     if active_save_highlight is not None:
                         active_save_highlight.get_camera_path().add_camera_target(new_target)
                     else:
                         self.camera_path.add_camera_target(new_target)
-                    mouse_click = False
+                    mouse_left_click = False
+                    mouse_middle_click = False
+                    mouse_right_click = False
 
                 show_target = not writeOutputFile and zoom > 1.0 and (next_camera.time < frame_time or self.paused)
                 out_frame = self._create_output_frame(frame, frame_x, frame_y, zoom, show_target)
@@ -629,11 +651,15 @@ class Processor:
 
                     text_y = 30
                     line1 = f"{self.angle_left:.1f} | {self.rotation:.1f} | {self.angle_right:.1f} ({angle:.2f})| "
-                    line1 += f"{self.camera_path.to_string(frame_time)} @ {ms_str(next_camera.time)} P:{self.period} {len(self.highlights.get_highlights())} highlights"
+                    line1 += f"{self.camera_path.to_string(frame_time)} @ {ms_str(next_camera.time)} P:{self.game_state.period} {len(self.highlights.get_highlights())} highlights"
                     if active_save_highlight is not None:
                         line1 += f" Saving Highlight {active_save_highlight.get_camera_path().to_string(frame_time)}"
                     if current_camera.cut_to:
                         line1 += " * IN CAMERA CUT *"
+                    if self.fastmo:
+                        line1 += " FASTMO"
+                    if self.slowmo:
+                        line1 += " SLOWMO"
                     cv2.putText(frame, line1, (0,text_y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,255,0), 2)
 
                     line2 = f"{ms_str(frame_time)} / {ms_str(total_vid_time)} Cap({self.cap.get_cap_index()}) {"Auto" if self.auto_record else ""} Zoom: {zoom:.1f}"
