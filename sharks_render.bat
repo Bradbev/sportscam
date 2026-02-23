@@ -1,0 +1,1 @@
+python sportscam.py %1 --render --logo d:\RawVideo\_wipes\sharkwipe.mov

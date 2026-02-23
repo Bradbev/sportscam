@@ -25,7 +25,52 @@ parser.add_argument("-i", "--iso", action="store_true", help="When ISO is active
 parser.add_argument("--logo", type=str, help="Logo screen wipe")
 parser.add_argument("--show-logo", action="store_true", help="Only show logo")
 parser.add_argument("--pos", action="store_true", help="Show posession")
+parser.add_argument("--keys", action="store_true", help="Show keys")
 args = parser.parse_args()
+
+def show_keys():
+    print("Period Control")
+    print("\tp/P - increment/decrement current period")
+
+    print("Score Control")
+    print("\t[{ - inc/dec left score")
+    print("\t]} - inc/dec right score")
+
+    print("Camera Control")
+    print("\tz/Z - zoom in/out")
+    print("\tc   - hard camera cut")
+
+    print("Highlights")
+    print("\th - start/stop highlight")
+    print("\tg - toggle highlight preview")
+    print("\td - delete highlight")
+
+    print("Frame Adjustment")
+    print("\tx/X - dec/inc center offset")
+    print("\to   - set zone offset")
+    print("\tu/i - rotate left/right.  (can be done per rink end too)")
+    print("\tj/k - move roi down/up")
+
+    print("Mini-view Control")
+    print("\tnm,. - move mini-view up/down/left/right")
+    print("\tU/I - rotate mini-view left/right")
+
+    print("Time Control")
+    print("\tspace - pause")
+    print("\t@ - jump to previous highlight")
+    print("\t# - jump to next highlight")
+    print("\ts  - slomo toggle")
+    print("\tf  - fastmo toggle")
+    print("\ta  - auto record toggle")
+    print("\t`12 - move back 60s, 15s, 5s")
+    print("\t345 - move forward 9s, 60s, 5m")
+    print("\t8,9 - from current camera, move back/forward 1 canera mark")
+    print("\t0 - move to last camera mark")
+
+    print("Mouse Controls")
+    print("\tleft   - place camera marker")
+    print("\tright  - increase shot count (left/right auto detect from x value)")
+    print("\tmiddle - increase goal count (left/right auto detect from x value)")
 
 writeOutputFile = args.render
 basePath = args.basepath
@@ -93,7 +138,7 @@ class Processor:
         print(filenames)
         self.filenames = filenames
         self.filename = filenames[0]
-        self.paused = False
+        self.paused = not writeOutputFile
         self.auto_record = False
         self.last_auto_time = 0
         self.mini_view_x = 3550
@@ -218,7 +263,7 @@ class Processor:
 
         return (left,neutral,right)
 
-    def handleKeys(self, key, frame_time):
+    def handle_keys(self, key, frame_time):
         # Period
         if key == ord('p'):
             self.game_state.period = self.game_state.period + 1
@@ -679,7 +724,7 @@ class Processor:
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
                     break
-                self.handleKeys(key, frame_time)
+                self.handle_keys(key, frame_time)
             else:
                 # Break the loop if the end of the video is reached
                 break
@@ -728,6 +773,10 @@ def examine_files():
     print(f"Starting process for {sources}")
     p.process()
     print(f"process for {sources} done")
+
+show_keys()
+if args.keys:
+    exit(0)
  
 load_logo()
 if args.show_logo:
