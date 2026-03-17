@@ -35,6 +35,8 @@ def show_keys():
     print("Score Control")
     print("\t[{ - inc/dec left score")
     print("\t]} - inc/dec right score")
+    print("\te - inc shot count")
+    print("\tE - inc goal count")
 
     print("Camera Control")
     print("\tz/Z - zoom in/out")
@@ -281,6 +283,14 @@ class Processor:
         if key == ord('}'):
             self.game_state.adjust_score((0, -1))
 
+        # shot
+        if key == ord('E'):
+            global mouse_middle_click
+            mouse_middle_click = True
+        if key == ord('e'):
+            global mouse_right_click
+            mouse_right_click = True
+
         #zoom 
         if key == ord('z'):
             self.zoom = min(3.0, self.zoom + 0.1)
@@ -373,14 +383,14 @@ class Processor:
             elif change_right:
                 self.top_of_roi_right -= 1
             else:
-                self.top_of_roi = self.top_of_roi-5
+                self.top_of_roi += 5
         if key == ord('k'):
             if change_left:
                 self.top_of_roi_left += 1
             elif change_right:
                 self.top_of_roi_right += 1
             else:
-                self.top_of_roi = self.top_of_roi+5
+                self.top_of_roi -= 5
         
         # Mini-view position
         if key == ord(','): # <
@@ -461,15 +471,15 @@ class Processor:
         return result
 
     def annotate_ouput_frame(self, out_frame):
-        # add on the score info
-        if writeOutputFile and not show_posession:
-            return
-
         period = f"Period   {self.game_state.period}"
         cv2.putText(out_frame, period, (400,50), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (215,215,215), 3)
         score_text = f"Score  {self.game_state.score[0]}-{self.game_state.score[1]}"
         cv2.putText(out_frame, score_text, (400,100), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (225,225,225), 3)
     
+        # add on the score info
+        if writeOutputFile and not show_posession:
+            return
+
         score_text = f"Shots  {self.game_state.shots[0]}-{self.game_state.shots[1]}"
         cv2.putText(out_frame, score_text, (400,150), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (225,225,225), 3)
 
@@ -623,7 +633,7 @@ class Processor:
                             self.set_time(cut_to_time)
                         logo_manager.do_wipe_then(jump_to_next_camera)
 
-                mouse_click = mouse_left_click or mouse_right_click
+                mouse_click = mouse_left_click or mouse_right_click or mouse_middle_click
                 if mouse_click or (self.auto_record and frame_time > self.last_auto_time + 1000):
                     attribute_to_left_team = clamped_mouse_x > (max_x//2 + self.center_x_offset)
                     if mouse_right_click:
@@ -685,7 +695,7 @@ class Processor:
                     rect_col = purple if self.auto_record else red
                     draw_target_rect(frame, clamped_mouse_x,frame_y, rect_col)
 
-                    if len(self.camera_path.camera_targets) == 1:
+                    if len(self.camera_path.camera_targets) == 0:
                         cv2.line(frame, (self.zone_left+w//2,0),(self.zone_left+w//2,frame.shape[0]), (255,255,255), 1)
                         cv2.line(frame, (self.zone_right+w//2,0),(self.zone_right+w//2,frame.shape[0]), (255,255,255), 1)
 
