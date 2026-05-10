@@ -161,6 +161,7 @@ class Processor:
         self.slowmo = False
         self.fastmo = False
         self.zoom = 1.0
+        self.bookmark_times_ms = []
         self.play_highlights = writeOutputFile
         self.do_camera_cuts = writeOutputFile
         self.finished_rendering = False
@@ -191,7 +192,8 @@ class Processor:
         self.mini_view_y = pkl["mini_view_y"]
         self.zone_left = pkl["zone_left"]
         self.zone_right = pkl["zone_right"]
-        
+        self.bookmark_times_ms = pkl["bookmark_times_ms"] if "bookmark_times_ms" in pkl else []
+
 
     def save_pickle(self, finished):
         toSave = {
@@ -218,6 +220,7 @@ class Processor:
             # processing state
             "rendered" : writeOutputFile and finished,
             "finished" : finished,
+            "bookmark_times_ms" : self.bookmark_times_ms
         }
         save_pkl(self.filename+'.pkl', toSave)
 
@@ -269,6 +272,7 @@ class Processor:
         # Period
         if key == ord('p'):
             self.game_state.period = self.game_state.period + 1
+            self.bookmark_times_ms.append((frame_time, f"period - {self.game_state.period}"))
         if key == ord('P'):
             self.game_state.period = self.game_state.period - 1
 
@@ -332,6 +336,9 @@ class Processor:
             if h is not None:
                 self.set_time(h.start_time)
 
+        # bookmarks
+        if key == ord('b'): 
+            self.bookmark_times_ms.append((frame_time, "bookmark"))
 
         if key == ord('g'):
             self.play_highlights = not self.play_highlights
@@ -409,6 +416,8 @@ class Processor:
         # Time and recording controls
         if key == ord('a'):
             self.auto_record = not self.auto_record
+            if self.auto_record:
+                self.paused = False
         if key == ord('`'):
             self.skip_time(-1000 * 60)
         if key == ord('1'):
@@ -430,7 +439,7 @@ class Processor:
                 self.set_time(self.camera_path.get_next_cam_time(frame_time))
             if key == ord('0'):
                 self.set_time(self.camera_path.get_last_cam_time())
-
+                self.paused = True
 
     def readFrame(self):
         return self.cap.read_frame()
@@ -490,13 +499,27 @@ class Processor:
         times = f"{ms_str(l*1000)} | {ms_str(n*1000)} | {ms_str(r*1000)}"
         cv2.putText(out_frame, times, (1200,100), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (215,215,215), 2)
 
-
+    def truncate_bookmarks_to_time(self, frame_time_ms):
+        if len(self.bookmark_times_ms) == 0:
+            return
+        self.bookmark_times_ms.sort(key=lambda x: x[0])
+        index = 0
+        while index < len(self.bookmark_times_ms):
+            if self.bookmark_times_ms[index][0] > frame_time_ms:
+                break
+            index = index + 1
+        self.bookmark_times_ms = self.bookmark_times_ms[0:index]
 
     def process(self):
         global mouse_x
         global mouse_left_click, mouse_middle_click, mouse_right_click
         global logo_manager
         self.cap = fastcap.FastCap([x + ".mp4" for x in self.filenames])
+
+        out = None
+        bookmark_out_times_ms = []
+        next_bookmark_index_to_find = 0
+        last_out_time_ms = 0
 
         fps = self.cap.get_fps()
         frame_ms = 1000 / fps
@@ -638,8 +661,10 @@ class Processor:
                     attribute_to_left_team = clamped_mouse_x > (max_x//2 + self.center_x_offset)
                     if mouse_right_click:
                         self.game_state.adjust_shots((1,0) if attribute_to_left_team else (0,1))
+                        self.bookmark_times_ms.append((frame_time, f"shot {self.game_state.shots[0]}-{self.game_state.shots[1]}"))
                     if mouse_middle_click:
                         self.game_state.adjust_score((1,0) if attribute_to_left_team else (0,1))
+                        self.bookmark_times_ms.append((frame_time, "goal {self.game_state.score[0]}-{self.game_state.score[1]"))
 
                     if self.auto_record:
                         self.last_auto_time = frame_time
@@ -649,6 +674,8 @@ class Processor:
                         active_save_highlight.get_camera_path().add_camera_target(new_target)
                     else:
                         self.camera_path.add_camera_target(new_target)
+                        self.truncate_bookmarks_to_time(frame_time)
+
                     mouse_left_click = False
                     mouse_middle_click = False
                     mouse_right_click = False
@@ -667,7 +694,14 @@ class Processor:
                         print(f"Processed {frame_count} frames in {delta} ({frame_count / delta.seconds} fps)")
                         next_print = datetime.now() + timedelta(seconds=30)
 
+                    if len(self.bookmark_times_ms) > next_bookmark_index_to_find:
+                        mark = self.bookmark_times_ms[next_bookmark_index_to_find]
+                        if mark[0] < frame_time:
+                            bookmark_out_times_ms.append((last_out_time_ms, mark[1]))
+                            next_bookmark_index_to_find += 1
+
                     out.write(out_frame)
+                    last_out_time_ms += frame_ms
 
                 if preview:
                     cv2.imshow('preview',out_frame)
@@ -706,7 +740,7 @@ class Processor:
 
                     text_y = 30
                     line1 = f"{self.angle_left:.1f} | {self.rotation:.1f} | {self.angle_right:.1f} ({angle:.2f})| "
-                    line1 += f"{self.camera_path.to_string(frame_time)} @ {ms_str(next_camera.time)} P:{self.game_state.period} {len(self.highlights.get_highlights())} highlights"
+                    line1 += f"{self.camera_path.to_string(frame_time)} @ {ms_str(next_camera.time)} P:{self.game_state.period} {len(self.highlights.get_highlights())} highlights {len(self.bookmark_times_ms)} bookmarks"
                     if active_save_highlight is not None:
                         line1 += f" Saving Highlight {active_save_highlight.get_camera_path().to_string(frame_time)}"
                     if current_camera.cut_to:
@@ -744,6 +778,9 @@ class Processor:
         self.cap.release()
         if writeOutputFile:
             out.release()
+            with open(path.join(basePath, self.filename+"_bookmarks.txt"), "w") as bookmark_file:
+                for b in bookmark_out_times_ms:
+                    bookmark_file.write(f"https://www.youtube.com/watch?v=fileguid&t={int(b[0]/1000)-5}s  -  {b[1]}\n")
 
         return finished
 

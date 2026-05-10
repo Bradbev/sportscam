@@ -10,7 +10,7 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
-            "args": "d:\\RawVideo\\2025-11-23 --logo d:\\RawVideo\\_wipes\\novawipe.mov",
+            "args": "d:\\RawVideo\\2026-03-29-novas",
             //"args": "d:\\RawVideo\\testdata --logo d:\\RawVideo\\_wipes\\sharkwipe.mov",
             //"args": "d:\\RawVideo\\2025-11-23-sharks --logo d:\\RawVideo\\_wipes\\sharkwipe.mov --pos",
             //"args": "d:\\RawVideo\\2025-11-24",
