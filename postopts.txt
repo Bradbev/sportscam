@@ -1,0 +1,16 @@
+['D:\\RawVideo\\2026-05-09\\DJI_20260509095217_0009_D', 'D:\\RawVideo\\2026-05-09\\DJI_20260509101401_0010_D']
+Starting process for [WindowsPath('D:/RawVideo/2026-05-09/DJI_20260509095217_0009_D.MP4'), WindowsPath('D:/RawVideo/2026-05-09/DJI_20260509101401_0010_D.MP4')]
+FPS: 23.976023976023978, FrameMS 41.70833333333333, Total Video Time: 1940938.9999999998
+OpenCV: FFMPEG: tag 0x31766361/'acv1' is not found (format 'mp4 / MP4 (MPEG-4 Part 14)')'
+Rendering to D:\RawVideo\2026-05-09\DJI_20260509095217_0009_D_processed.mp4 (1920, 1080)
+Processed 103 frames in 0:00:05.007170 (20.57 fps)
+=== sportscam profile ===
+wall_time_s=11.423  completed_frames=300
+  decode          total_ms=   7548.32  count=   301  avg_ms=  25.077
+  mini_view       total_ms=    144.94  count=   301  avg_ms=   0.482
+  output_roi      total_ms=    882.65  count=   300  avg_ms=   2.942
+  annotate_logo   total_ms=     18.25  count=   300  avg_ms=   0.061
+  encode          total_ms=    232.41  count=   300  avg_ms=   0.775
+  preview_ui      total_ms=    143.68  count=   300  avg_ms=   0.479
+  frame_total     total_ms=  11422.35  count=   301  avg_ms=  37.948  pct_wall=100.0%
+process for [WindowsPath('D:/RawVideo/2026-05-09/DJI_20260509095217_0009_D.MP4'), WindowsPath('D:/RawVideo/2026-05-09/DJI_20260509101401_0010_D.MP4')] done

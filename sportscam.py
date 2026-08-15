@@ -1,5 +1,6 @@
 import glob
 import math
+import os
 from pathlib import Path
 import time
 import numpy as np
@@ -269,8 +270,17 @@ class Processor:
         return (left,neutral,right)
 
     def handle_keys(self, key, frame_time):
-        # Period
+        def set_camera_cut():
+            highlight_is_saving = self.highlights.get_active_save_highlight() is not None
+            if not highlight_is_saving and len(self.camera_path.camera_targets) > 0:
+                self.camera_path.camera_targets[-1].cut_to = True
+                self.auto_record = False
+
+        # Period advance
         if key == ord('p'):
+            # always set camera cut between periods
+            set_camera_cut()
+
             self.game_state.period = self.game_state.period + 1
             self.bookmark_times_ms.append((frame_time, f"period - {self.game_state.period}"))
         if key == ord('P'):
@@ -302,11 +312,8 @@ class Processor:
             self.zoom = max(1.0, self.zoom - 0.1)
 
         # Hard camera cut
-        highlight_is_saving = self.highlights.get_active_save_highlight() is not None
         if key == ord('c'):
-            if not highlight_is_saving and len(self.camera_path.camera_targets) > 0:
-                self.camera_path.camera_targets[-1].cut_to = True
-                self.auto_record = False
+            set_camera_cut()
 
         # Pausing
         if key == ord(' '):
@@ -819,7 +826,8 @@ def examine_files():
     p = Processor([str(fp.with_suffix("")) for fp in sources])
     print(f"Starting process for {sources}")
     p.process()
-    print(f"process for {sources} done")
+    print(f"sharks_render.bat {os.path.dirname(sources[0])}")
+    print(f"python sportscam {os.path.dirname(sources[0])} --render")
 
 show_keys()
 if args.keys:
