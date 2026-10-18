@@ -671,7 +671,7 @@ class Processor:
                         self.bookmark_times_ms.append((frame_time, f"shot {self.game_state.shots[0]}-{self.game_state.shots[1]}"))
                     if mouse_middle_click:
                         self.game_state.adjust_score((1,0) if attribute_to_left_team else (0,1))
-                        self.bookmark_times_ms.append((frame_time, "goal {self.game_state.score[0]}-{self.game_state.score[1]"))
+                        self.bookmark_times_ms.append((frame_time, f"goal {self.game_state.score[0]}-{self.game_state.score[1]}"))
 
                     if self.auto_record:
                         self.last_auto_time = frame_time
