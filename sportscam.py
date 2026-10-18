@@ -893,9 +893,9 @@ class Processor:
                 if frame_count == 1:
                     # Jump ahead to the start (the first camera, or the first recorded one on an
                     # autotrack path) if it's far enough away
-                    start_time = self.camera_path.get_start_time()
-                    if start_time - frame_time > 5000:
-                        self.set_time(start_time)
+                    path_start = self.camera_path.get_start_time()
+                    if path_start - frame_time > 5000:
+                        self.set_time(path_start)
                         continue
                     # if we happen to be cutting to a camera as we also change files....
                     if current_camera.cut_to:

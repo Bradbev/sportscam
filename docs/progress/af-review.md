@@ -611,3 +611,7 @@ team order, with all goal and period bookmarks, and kept your start 3:09, both c
   the rest, e.g. `Bombshells_v_Supernovas`, giving
   `D:\RawVideo\2026-10-18-Bombshells_v_Supernovas.mp4`. It asks before overwriting. A
   2-minute test render went from 771 MB to 31 MB.
+- **Render crash fixed:** the start-point jump reused the name `start_time`, which the
+  render loop also uses for its progress timer. The first progress print then subtracted
+  a float from a datetime. The variable is renamed to `path_start`. A render on
+  2026-10-18 then worked (you checked it).
