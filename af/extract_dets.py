@@ -115,7 +115,7 @@ def detect(files, out_dir, rotation, weights, stride=5, conf=0.10, max_frames=0)
             n, frame = item
             band = cv2.warpAffine(frame, M, (rot_w, band_h))
             res = model.predict(band, imgsz=imgsz, classes=[0], conf=args.conf,
-                                verbose=False, half=True)[0]
+                                verbose=False, quantize=16)[0]  # quantize=16: FP16
             b = res.boxes.xyxy.cpu().numpy().astype(np.float32)
             b[:, [1, 3]] += ROT_BAND[0]  # back to base-rotation frame rows
             c = res.boxes.conf.cpu().numpy().astype(np.float32)
