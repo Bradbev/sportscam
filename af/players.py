@@ -17,7 +17,7 @@ OUT_W = 1920
 
 
 class Detections:
-    def __init__(self, dets_dir, edges_path, max_x):
+    def __init__(self, dets_dir, edges_path, max_x, col_map=None):
         self.meta = json.load(open(os.path.join(dets_dir, "meta.json"))) \
             if os.path.exists(os.path.join(dets_dir, "meta.json")) else None
         files = sorted(glob.glob(os.path.join(dets_dir, "*.npz")))
@@ -41,8 +41,11 @@ class Detections:
         self.fixed_w = len(self.top)
         self.max_x = max_x
         self.pan_span = max_x + OUT_W
+        self.col_map = col_map  # exact per-game mapping (geometry.ColToX), else linear
 
     def col_to_x(self, col):
+        if self.col_map is not None:
+            return self.col_map(col)
         return col / self.fixed_w * self.pan_span - OUT_W / 2
 
     def on_ice(self, conf_min=0.25, top_tol=15, bot_tol=30, min_h=20):
