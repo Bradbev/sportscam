@@ -1,8 +1,7 @@
 # af-review: human verification before the final render (design only)
 
-Status: **design only, not started.** Branch TBD; probably a new `af-review` branch from
-whichever autoframe branch is best at the time. This is mostly app (`sportscam.py`) work
-rather than model work, so it may be better to branch from `main`.
+Status: **in progress** on branch `af-review` (from `main`), worktree
+`C:\dev\sportscam-wt\af-review`. The plan and log are at the end of this file.
 
 Goal: the auto pass produces a camera path, a score history and cut points. The human
 then spends a few minutes checking only the parts the system is unsure of, and renders.
@@ -339,3 +338,31 @@ period (via `_get_lr`).
 Branch: one `af-review` branch for the offline analysis (items 2, 4, 5). The app changes
 (item 3, the bookmark bug, defaults) are better as a separate small branch from `main`,
 because they touch `sportscam.py`, which you use day to day.
+
+## Implementation plan (2026-10-18, before starting)
+
+You asked for this whole design, plus one extra rule: **the first manually recorded
+segment marks the render start.** Auto points before your first recorded point are
+skipped when rendering, so to trim the warm-up you record a moment at the first faceoff.
+It's non-destructive: the auto points stay in the pkl.
+
+Order, with a commit and a log entry after each stage:
+
+| Stage | What | Where |
+|---|---|---|
+| A | `CameraPath`: bisect lookup, `replace_range`, provenance (`source`); render starts at the first human point; app calibration defaults set to the two-game average | app |
+| B | Confidence: an error model trained across games, review segments ranked by expected error, and the "minutes reviewed → MAE after review" curve with tiers; `autotrack.py` writes `review.json` | offline + autotrack |
+| C | Review mode: a small start-up menu when `sportscam.py DIR` runs; jump to the next or previous segment; record replaces only the segment; accept; status line and timeline strip | app |
+| D | Scoreboard and goals: find the clock automatically, read the score digits, take the period from the clock, a centre-ice faceoff detector, cross-check, then write bookmarks, score on the targets, review entries and intermission cut suggestions | offline + autotrack + app |
+
+Your answers that shape it:
+- Normal recording keeps truncate-forward; replace-in-range applies only in review mode.
+- A 1 s glide at segment edges is fine.
+- Review in tiers: 5–10 minutes first, then optional second and third passes.
+- Close enough is the goal.
+- The scoreboard can break, so anything using it has a fallback and goes to review when
+  unsure.
+- Every centre-ice faceoff is flagged for review.
+- No automatic shots. Goal highlights come later.
+
+## Implementation log
