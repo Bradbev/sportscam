@@ -473,3 +473,89 @@ autotrack has run and how many review segments it found. Then it asks:
   point, the end at 1266 s, `review_done` with both segments, and a still-sorted path.
 - **Not yet checked by a person:** how it feels to use. Key choices, pause timing and
   timeline readability need you to try it.
+
+### Stage D: scoreboard, goals, periods, cuts (done)
+
+**Scoreboard** (`af/scoreboard.py`), read from the half-res band proxy:
+- **Clock:** found automatically. The seconds digits are the pixels that change with a
+  strong 1 Hz rhythm. Found at proxy (2080, 117) in G1 and (2100, 133) in G2, both
+  correct.
+- **Score digits:** the same offsets below the clock in both games. Brightness is the
+  per-pixel max channel, because greyscale makes the blue home digits nearly vanish.
+- **Score change:** a lasting step. The 7 s median image 10 s after differs from 10 s
+  before (measured on the most-changed quarter of pixels), while both sides are steady.
+  Very large steps are the board being switched on, off or reset.
+- **Clock running** gives the periods: running with players on the ice, at least 8 min,
+  gaps under 2 min bridged. The intermission countdown also runs, but on empty ice.
+
+**Play** (`af/events.py`):
+- **Faceoffs:** a few seconds with almost nobody moving fast and a tight group, then a
+  restart. The place is the group's median x.
+- **Goals:** a centre-ice faceoff that isn't a period opener, after end-zone play. The
+  end decides the team, the way the app does (`attribute_to_left_team`, period-2 swap).
+- **Intermissions:** a minute or more of nearly empty ice. This is the fallback for
+  periods when there's no board.
+
+**Combined** (`af/gameinfo.py`):
+- Board goals matched to play goals within 25 s are "confirmed". Others are "board only"
+  or "play only".
+- Home/away is mapped onto the app's score[0]/score[1] by vote from confirmed goals.
+- When the board works, only board goals count. When it doesn't, play goals count, and
+  all of them go to review.
+
+| | G1 | G2 |
+|---|---|---|
+| Board, final | 4-3 (Tigers–Warriors) | **6-2** (Huskies–Tigers) |
+| Operator's log | 7 goals, score history identical to ours | 6 entries, 2-4: **missed 2 goals** (about 2205 s and 3717 s) and double-clicked one (2429 s) |
+| Ours (board + play) | 7 of 7 at the right times, sides right, history = yours | 8 of 8, final 2-6 in the app's team order |
+| Play alone | 5 of 7, 1 extra | found 2 goals the operator missed; 1 extra (P3 start), missed 1 |
+| Periods / cuts | clock periods 993–1894, 2060–2962, 3132–4116; cuts within 3–7 s of yours | P1 includes the warm-up countdown (gap < 2 min); cuts close to yours |
+
+**In autotrack and the app:**
+- `auto_path.pkl` now carries period and score on every point, plus `period - N` and
+  `goal a-b` bookmarks. The app copies the bookmarks in, along with the path, when the
+  game has none.
+- `review.json` gets event entries ahead of the camera segments:
+  - **goal:** board only, or play only. Enter = it's a goal (adds it if it wasn't
+    counted); Backspace = not a goal (takes it out). The score on every later point and
+    all goal bookmarks are rebuilt.
+  - **faceoff:** a centre-ice faceoff nothing explains. Enter = fine.
+  - **cut:** an intermission. The review jumps to its start and pauses; Enter applies
+    the cut, Backspace keeps it.
+- On G2 as a new game, autotrack reports "3 periods, 8 goals ((2, 6)), scoreboard used"
+  and writes 4 event entries (2 doubtful goals, 2 cuts) plus 87 camera segments.
+- **Headless drives** of the app:
+  - both cuts applied (no points left inside them);
+  - adding a play-only goal gave a new `goal 2-5` bookmark and shifted the later one;
+  - rejecting a board-only goal took it back out; the final score stayed consistent.
+- Tests: 12 pass (event ordering and sidecar game info added).
+
+**Known limits:**
+- The digits aren't read, only counted from 0-0. A board correction (a goal taken back)
+  looks like another goal. It goes to review if play doesn't confirm it.
+- Two-digit scores are untested.
+- If the scoreboard moves position (another rink), the clock is still found
+  automatically, but the digit offsets are fixed for this board.
+
+## Checkpoint, 2026-10-18 night: what to try
+
+All on branch `af-review` (not merged). To try it on game 2's videos as if it were a
+new game:
+
+```
+cd C:\dev\sportscam-wt\af-review
+python sportscam.py D:\temp\af\render_g2
+```
+Choose **1** in the menu. Then:
+1. Press `T` at the first faceoff.
+2. Press `=` to step: intermission cuts and goal questions first, then camera segments
+   by tier.
+3. For each one, Enter, Backspace, or `a` to re-record.
+4. Press `q` to save.
+
+A render (`-r`) then starts at your `T` point and skips the cut intermissions.
+
+`D:\temp\af\render_g2` holds hardlinks to the 2026-08-15 videos plus the autotrack
+outputs; your own pkl there isn't touched. To run it on your new game, run
+`autotrack.py D:\RawVideo\2026-10-18` again from this worktree (seconds, since detection
+is cached) and open it the same way.

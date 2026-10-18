@@ -75,7 +75,8 @@ def show_keys():
 
     print("Review (--review, or 1 in the start-up menu)")
     print("\t= / -  - next / previous segment (plays from 3s before, pauses after)")
-    print("\tEnter  - segment OK")
+    print("\tEnter  - segment OK / yes it's a goal / cut this intermission")
+    print("\tBackspace - not a goal / keep this intermission")
     print("\ta      - re-record: replaces the path only while recording")
     print("\tT      - start: rendering begins here (do this at the first faceoff)")
     print("\tY      - end: nothing after here is rendered")
@@ -249,6 +250,8 @@ class Processor:
             if loaded is None:
                 self.load_camera_config_pickle(auto)  # the calibration the path was computed with
             self.camera_path = auto["camera_path"]
+            if not self.bookmark_times_ms:
+                self.bookmark_times_ms = list(auto.get("bookmark_times_ms", []))  # periods and goals
             print(f"Loaded {len(self.camera_path.camera_targets)} auto camera targets from {AUTO_PATH_PKL}")
 
         self.review_done = loaded.get("review_done", []) if loaded is not None else []
@@ -353,24 +356,64 @@ class Processor:
         start_set = any(getattr(c, "source", "human") == "human" for c in path_.camera_targets)
         return path_.get_start_time(), start_set, path_.get_last_cam_time()
 
+    def adjust_goal(self, t, team, delta):
+        """Add (+1) or take back (-1) a goal for score index `team` from time t on, and
+        rewrite the goal bookmarks to match."""
+        for c in self.camera_path.camera_targets:
+            if c.time >= t:
+                gs = c.game_state.copy()
+                score = list(gs.score)
+                score[team] = max(0, score[team] + delta)
+                gs.score = tuple(score)
+                c.game_state = gs
+        marks = [b for b in self.bookmark_times_ms if not b[1].startswith("goal")]
+        prev = (0, 0)
+        for c in self.camera_path.camera_targets:
+            s = c.game_state.score
+            if sum(s) > sum(prev):
+                marks.append((c.time, f"goal {s[0]}-{s[1]}"))
+            prev = s
+        self.bookmark_times_ms = sorted(marks)
+
     def handle_review_keys(self, key, frame_time):
         """Review-mode keys; returns True when the key was handled here."""
         r = self.review
         cam, _, _ = self.camera_path.get_camera_at_time(frame_time)
 
         def marker(t, source, cut_to=False):
-            c, _, _ = self.camera_path.get_camera_at_time(t)
-            return CameraTarget(t, x=int(c.x), y=c.y, cut_to=cut_to, zoom=1.0, game_state=self.game_state, source=source)
+            c, _, nxt = self.camera_path.get_camera_at_time(t)  # the app takes game state from the next camera
+            return CameraTarget(t, x=int(c.x), y=c.y, cut_to=cut_to, zoom=1.0, game_state=nxt.game_state, source=source)
+
+        def cut(a, b):
+            self.camera_path.replace_range(a - 500, b + 500, [marker(a, "review", cut_to=True), marker(b, "review")])
 
         if key in (ord('='), ord('-')):
             start, _, end = self.review_start_end()
             e = r.step(start, end, forward=key == ord('='))
-            if e is not None:
+            if e is not None and e.get("kind") == "cut":
+                self.set_time(e["t0"])  # nothing to watch in an intermission: show where it starts
+                self.paused = True
+                r.at_end = True
+            elif e is not None:
                 self.set_time(max(0, e["t0"] - LEAD_IN_MS))
                 self.paused = False
             return True
-        if key == 13:  # Enter: this segment is fine (or now fixed)
+        e = r.current
+        kind = e.get("kind", "camera") if e is not None else None
+        if key == 13:  # Enter: fine / yes
+            if kind == "cut" and e["t0"] not in r.done:
+                cut(e["t0"], e["t1"])
+            if kind == "goal" and not e.get("scored") and e["t0"] not in r.done:
+                self.adjust_goal(e["t"], e["team"], +1)
+                e["scored"] = True
             r.accept()
+            return True
+        if key == 8:  # Backspace: no
+            if kind == "goal" and e.get("scored"):
+                self.adjust_goal(e["t"], e["team"], -1)
+                e["scored"] = False
+            if kind in ("goal", "cut"):
+                r.accept()
             return True
         if key == ord('T'):  # start: a recorded point here; earlier recorded points no longer count
             for c in self.camera_path.camera_targets:
@@ -385,8 +428,7 @@ class Processor:
             if r.cut_start is None:
                 r.cut_start = frame_time
             elif frame_time > r.cut_start + 2000:
-                a, b = r.cut_start, frame_time
-                self.camera_path.replace_range(a - 500, b + 500, [marker(a, "review", cut_to=True), marker(b, "review")])
+                cut(r.cut_start, frame_time)
                 r.cut_start = None
             return True
         if key == ord('C'):

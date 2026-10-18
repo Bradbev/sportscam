@@ -49,3 +49,15 @@ def test_video_files_are_ordered_and_skip_renders(tmp_path):
         (tmp_path / n).write_bytes(b"")
     names = [p.split("\\")[-1].split("/")[-1] for p in video_files(str(tmp_path))]
     assert names == ["A_0001_D.MP4", "B_0002_D.MP4"]
+
+
+def test_sidecar_carries_periods_goals_and_bookmarks():
+    mx = max_x(DEFAULTS, W, H)
+    t = np.arange(0, 1000000, 200.0)
+    game = {"periods": [(0, 400000), (600000, 1000000)],  # a period counts from 60 s before its clock starts
+            "scored": [{"t": 200000.0, "team": 1}, {"t": 700000.0, "team": 0}]}
+    side = make_sidecar(DEFAULTS, t, np.full(len(t), 1000.0), mx, game=game)
+    gs = {c.time: c.game_state for c in side["camera_path"].camera_targets}
+    assert gs[100000].score == (0, 0) and gs[300000].score == (0, 1) and gs[900000].score == (1, 1)
+    assert gs[100000].period == 1 and gs[530000].period == 1 and gs[550000].period == 2
+    assert [b[1] for b in side["bookmark_times_ms"]] == ["goal 0-1", "period - 2", "goal 1-1"]

@@ -19,22 +19,43 @@ import numpy as np
 from .calibration import CALIB_KEYS, load_calibration
 from camerapath import CameraPath
 from cameratarget import CameraTarget
+from gamestate import GameState
 
 SIDECAR = "auto_path.pkl"
 REVIEW = "review.json"
 
 
-def make_sidecar(calib, times_ms, xs, max_x, info=None, step_ms=1000):
+def make_sidecar(calib, times_ms, xs, max_x, info=None, step_ms=1000, game=None):
+    """`game` (af.gameinfo.analyse) sets period and score on every target and adds
+    period / goal bookmarks, the same way recording in the app would."""
     xp = [0, max_x // 2 + calib["center_x_offset"], max_x]
     fp = [calib["top_of_roi_left"], 0, calib["top_of_roi_right"]]
     path = CameraPath()
-    # built directly: add_camera_target rescans the path on every call
+    bookmarks = []
+    goals = sorted(game["scored"], key=lambda gl: gl["t"]) if game else []
+    periods = game["periods"] if game else []
+    # built directly: add_camera_target truncates forward on every call
     for t in np.arange(times_ms[0], times_ms[-1], step_ms):
         x = int(np.clip(np.interp(t, times_ms, xs), 0, max_x))
         y = -calib["top_of_roi"] + float(np.interp(x, xp, fp))
-        path.camera_targets.append(CameraTarget(float(t), x=x, y=y, zoom=1.0, source="auto"))
+        gs = GameState()
+        if game:
+            gs.period = 1 + sum(1 for a, _ in periods[1:] if t >= a - 60000)
+            score = [0, 0]
+            for gl in goals:
+                if gl["t"] <= t:
+                    score[gl["team"]] += 1
+            gs.score = tuple(score)
+        path.camera_targets.append(CameraTarget(float(t), x=x, y=y, zoom=1.0, game_state=gs, source="auto"))
+    if game:
+        score = [0, 0]
+        for gl in goals:
+            score[gl["team"]] += 1
+            bookmarks.append((float(gl["t"]), f"goal {score[0]}-{score[1]}"))
+        bookmarks += [(float(a - 60000), f"period - {k + 2}") for k, (a, _) in enumerate(periods[1:])]
     out = {k: calib[k] for k in CALIB_KEYS}
     out["camera_path"] = path
+    out["bookmark_times_ms"] = sorted(bookmarks)
     out["autotrack"] = dict(info or {}, created=time.strftime("%Y-%m-%d %H:%M:%S"))
     return out
 

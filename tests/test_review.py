@@ -48,3 +48,10 @@ def test_missing_review_json_is_empty(tmp_path):
     s = ReviewSession(str(tmp_path))
     assert s.step(0, 1e9) is None
     assert s.status_lines(0, 0, False, 1000)[0].startswith("REVIEW")
+
+
+def test_events_come_before_camera_segments(tmp_path):
+    entries = [seg(100, 10, 9), {"kind": "goal", "t0": 500000.0, "t1": 517000.0, "t": 512000.0, "team": 0},
+               {"kind": "cut", "t0": 300000.0, "t1": 400000.0}]
+    s = session(tmp_path, entries)
+    assert [e.get("kind") for _, e in s.tiered(0, 1e9)] == ["cut", "goal", "camera"]

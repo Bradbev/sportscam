@@ -6,6 +6,7 @@ import time
 from .calibration import load_calibration, video_files
 from .extract_dets import detect, probe
 from . import confidence as C
+from . import gameinfo
 from .export import make_sidecar, write_review, write_sidecar
 from .game import CACHE_NAME, Game
 from .icemask import build_cache
@@ -44,6 +45,26 @@ def prepare(video_dir, cache_dir=None, rebuild_features=False):
     return g
 
 
+def game_entries(game):
+    """Review entries for everything about the game that isn't certain."""
+    out = []
+    for gl in game["goals"]:
+        if gl["status"] == "confirmed" and game["board_ok"]:
+            continue
+        scored = gl in game["scored"]
+        why = {"board only": "scoreboard changed, no centre faceoff seen after",
+               "play only": "centre faceoff after end-zone play, scoreboard didn't change",
+               "confirmed": "goal from play (no scoreboard)"}[gl["status"]]
+        out.append({"kind": "goal", "t": gl["t"], "t0": gl["t"] - 12000, "t1": gl["t"] + 5000, "team": gl["team"],
+                    "scored": scored, "reason": f"{'goal' if scored else 'possible goal'}: {why}"})
+    for f in game["centre_faceoffs"]:
+        out.append({"kind": "faceoff", "t0": f["t"] - 25000, "t1": f["t"] + 3000,
+                    "reason": "centre-ice faceoff with no goal or period start: a missed goal?"})
+    for a, b in game["cuts"]:
+        out.append({"kind": "cut", "t0": a, "t1": b, "reason": "intermission: Enter cuts it out"})
+    return out
+
+
 def run(video_dir, cache_dir=None, model_path=M.DEFAULT_MODEL):
     model = M.Model(model_path)  # fail before an hour of detection, not after
     g = prepare(video_dir, cache_dir)
@@ -51,22 +72,34 @@ def run(video_dir, cache_dir=None, model_path=M.DEFAULT_MODEL):
     info = {"model": os.path.basename(model_path), "trained_on": model.meta["trained_on"],
             "calibration": "main pkl" if os.path.exists(os.path.splitext(video_files(video_dir)[0])[0] + ".pkl")
             else "defaults"}
-    dst = write_sidecar(video_dir, make_sidecar(g.calib, g.t, pred, g.max_x, info))
+    try:
+        game = gameinfo.analyse(g, pred)
+    except Exception as e:  # periods and goals are a bonus; never lose the camera path over them
+        print(f"periods/goals skipped: {e!r}")
+        game = None
+    if game:
+        info["scoreboard"] = "used" if game["board_ok"] else "not found (goals from play only)"
+        final = [0, 0]
+        for gl in game["scored"]:
+            final[gl["team"]] += 1
+        print(f"{len(game['periods'])} periods, {len(game['scored'])} goals ({tuple(final)}), "
+              f"scoreboard {info['scoreboard']}")
+    dst = write_sidecar(video_dir, make_sidecar(g.calib, g.t, pred, g.max_x, info, game=game))
     print(f"wrote {dst} ({len(g.t) / HZ / 60:.0f} min of video)")
+    entries = game_entries(game) if game else []
     review = C.ReviewModels.load()
     if review is None:
-        print("no review models in models/; skipping review.json (autotrack.py train makes them)")
+        print("no review models in models/; review.json has no camera segments (autotrack.py train makes them)")
     else:
         score, err, live, S = review.score(g, pred)
         segs = C.segments(g.t, score)
         reasons = C.describe(g.t, S, review.names, segs)
-        entries = []
         for (t0, t1, total), why in zip(segs, reasons):
             m = (g.t >= t0) & (g.t <= t1)
             entries.append({"kind": "camera", "t0": t0, "t1": t1, "score": round(total),
                             "expected_px": round(float(err[m].mean())), "live": round(float(live[m].mean()), 2),
                             "reason": why})
-        print(f"wrote {write_review(video_dir, entries)} ({len(entries)} segments)")
+    print(f"wrote {write_review(video_dir, entries)} ({len(entries)} entries)")
     if g.human is not None:
         from .metrics import evaluate, fmt
         print(fmt("  vs the hand-tracked path in this folder", evaluate(g.t, pred, g.human)))

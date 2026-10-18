@@ -41,13 +41,16 @@ class ReviewSession:
     def tiered(self, start_ms, end_ms):
         """[(tier, entry)] for entries inside [start, end], tier 0..3, time order within a tier."""
         inside = [e for e in self.entries if e["t0"] >= start_ms and e["t1"] <= end_ms]
-        out, used, tier = [], 0.0, 0
+        # goals, faceoffs and cuts are quick to check and matter most: always first
+        out = [(0, e) for e in inside if e.get("kind", "camera") != "camera"]
+        used, tier = 0.0, 0
+        inside = [e for e in inside if e.get("kind", "camera") == "camera"]
         for e in inside:  # review.json is ranked best first
             while tier < len(TIER_BUDGET_S) and used >= sum(TIER_BUDGET_S[:tier + 1]):
                 tier += 1
             out.append((tier, e))
             used += (e["t1"] - e["t0"]) / 1000
-        out.sort(key=lambda r: (r[0], r[1]["t0"]))
+        out.sort(key=lambda r: (r[0], r[1].get("kind", "camera") == "camera", r[1]["t0"]))
         return out
 
     def step(self, start_ms, end_ms, forward=True):
@@ -91,9 +94,15 @@ class ReviewSession:
             line2 = f"CUT from {fmt_ms(self.cut_start)}: seek to the restart and press c again (C cancels)"
         elif self.current is not None:
             e = self.current
-            state = "reviewed" if e["t0"] in self.done else ("Enter = OK, a = re-record" if self.at_end else "")
-            line2 = (f"segment {fmt_ms(e['t0'])}-{fmt_ms(e['t1'])}: {e.get('reason', '')} "
-                     f"(~{e.get('expected_px', 0)}px)  {state}")
+            kind = e.get("kind", "camera")
+            keys = {"camera": "Enter = OK, a = re-record",
+                    "goal": "Enter = goal, Backspace = no goal" if not e.get("scored") else
+                            "Enter = goal OK, Backspace = not a goal",
+                    "faceoff": "Enter = OK (add a goal with middle-click if missed)",
+                    "cut": "Enter = cut the intermission out, Backspace = keep it"}[kind]
+            state = "reviewed" if e["t0"] in self.done else keys
+            extra = f" (~{e.get('expected_px', 0)}px)" if kind == "camera" else ""
+            line2 = f"{kind} {fmt_ms(e['t0'])}-{fmt_ms(e['t1'])}: {e.get('reason', '')}{extra}  {state}"
         else:
             line2 = "= next segment  - previous  Enter accept  a re-record (replaces)  T start  Y end  c cut"
         return line1, line2
@@ -106,6 +115,8 @@ class ReviewSession:
         cv2.rectangle(img, (x_of(end_ms), y0), (w - 1, y0 + height), (15, 15, 15), -1)
         for tier, e in self.tiered(start_ms, end_ms):
             col = (0, 200, 0) if e["t0"] in self.done else TIER_COLOURS[min(tier, 3)]
+            if e.get("kind", "camera") != "camera" and e["t0"] not in self.done:
+                col = (255, 0, 255)  # events: magenta
             cv2.rectangle(img, (x_of(e["t0"]), y0 + 4), (max(x_of(e["t1"]), x_of(e["t0"]) + 2), y0 + height - 4), col, -1)
         if self.current is not None:
             cv2.rectangle(img, (x_of(self.current["t0"]) - 3, y0), (x_of(self.current["t1"]) + 3, y0 + height),
