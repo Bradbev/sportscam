@@ -366,3 +366,22 @@ Your answers that shape it:
 - No automatic shots. Goal highlights come later.
 
 ## Implementation log
+
+### Stage A: path data model, render start, defaults (done)
+
+- `CameraPath.camera_index` now uses bisect instead of a linear scan. A test checks it
+  matches the old scan exactly.
+- New `CameraPath.replace_range(t0, t1, targets)`. It's not used by normal recording yet,
+  which still truncates forward.
+- New `CameraPath.get_start_time()`. On a path that mixes auto and recorded points, the
+  first recorded point is the start; otherwise it's the first point. The app's opening
+  "jump to the first camera" uses it, so playback and rendering start at your first
+  recorded point.
+  - **Caveat:** if the first thing you record is a fix in the middle of the game, that
+    becomes the start. Review mode (stage C) will show the start time and ask you to set
+    it first.
+- App calibration defaults, and `af/calibration.py`, are now the average of the
+  hand-calibrated games: top_of_roi -1732 (left -75, right 161), center_x_offset 54,
+  zones 793/2129, mini-view 3384/2020, rotation 6.3. The zones and mini-view rotation
+  come only from the two games where you had set them.
+- Tests: `tests/test_camerapath.py` (3) and `tests/test_autotrack.py` (4) all pass.

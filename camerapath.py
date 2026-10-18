@@ -1,5 +1,11 @@
 
+from bisect import bisect_left, bisect_right
+
 from cameratarget import CameraTarget
+
+
+def _time(target):
+    return target.time
 
 
 def sign(x):
@@ -34,14 +40,32 @@ class CameraPath:
                 return
         self.camera_targets.append(camera_target)
 
+    def replace_range(self, t0, t1, new_targets=()):
+        """Swap the targets with t0 <= time <= t1 for new_targets (which must lie in that
+        range); everything outside the range is kept.  Used when re-recording a stretch
+        of an existing path, instead of add_camera_target's truncate-forward."""
+        targets = self.camera_targets
+        i0 = bisect_left(targets, t0, key=_time)
+        i1 = bisect_right(targets, t1, key=_time)
+        targets[i0:i1] = sorted(new_targets, key=_time)
+
     def camera_index(self, time):
-        index = 0
-        while index < len(self.camera_targets)-1:
-            if time > self.camera_targets[index+1].time:
-                index = index + 1
-                continue
-            return index
-        return index
+        """Index of the target whose interval [t[i], t[i+1]] contains time (0 before the
+        first target, the last index after the last one)."""
+        k = bisect_left(self.camera_targets, time, key=_time)
+        return max(0, min(k - 1, len(self.camera_targets) - 1))
+
+    def get_start_time(self):
+        """Where playback and rendering begin.  On a path that mixes autotrack targets
+        with recorded ones, the first recorded target marks the start: the auto path
+        before it (warm-up) is kept but skipped."""
+        targets = self.camera_targets
+        if not targets:
+            return 0
+        sources = {getattr(c, "source", "human") for c in targets}
+        if "auto" in sources and "human" in sources:
+            return next(c.time for c in targets if getattr(c, "source", "human") == "human")
+        return targets[0].time
 
     # returns x value, the current camera, and the next camera
     def get_camera_at_time(self, frame_time):

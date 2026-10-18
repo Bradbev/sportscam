@@ -18,10 +18,12 @@ CALIB_KEYS = ("top_of_roi", "top_of_roi_left", "top_of_roi_right", "rotation", "
               "angle_left", "angle_right", "mini_view_x", "mini_view_y", "center_x_offset",
               "zone_left", "zone_right")
 
-# Average of 2026-08-15 and 2026-08-22 as calibrated by hand.
-DEFAULTS = dict(top_of_roi=-1755, top_of_roi_left=-75, top_of_roi_right=152, rotation=37,
-                mini_rotation=6.3, angle_left=-9, angle_right=9, mini_view_x=3376, mini_view_y=2022,
-                center_x_offset=62, zone_left=793, zone_right=2129)
+# Average of the games calibrated by hand at the home rink (2026-08-15, 08-22, 10-18;
+# zones and mini-view rotation from the first two only).  Kept in step with the
+# defaults in sportscam.py's Processor.
+DEFAULTS = dict(top_of_roi=-1732, top_of_roi_left=-75, top_of_roi_right=161, rotation=37,
+                mini_rotation=6.3, angle_left=-9, angle_right=9, mini_view_x=3384, mini_view_y=2020,
+                center_x_offset=54, zone_left=793, zone_right=2129)
 
 
 def video_files(video_dir):

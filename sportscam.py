@@ -146,19 +146,21 @@ class Processor:
         self.paused = not writeOutputFile
         self.auto_record = False
         self.last_auto_time = 0
-        self.mini_view_x = 3550
-        self.mini_view_y = 2000
-        self.zone_left = 720
-        self.zone_right = 2048
+        # Calibration defaults: the average of hand-calibrated games at the home rink
+        # (kept in step with af/calibration.py DEFAULTS)
+        self.mini_view_x = 3384
+        self.mini_view_y = 2020
+        self.zone_left = 793
+        self.zone_right = 2129
         self.rotation = 37
-        self.mini_rotation = 8
-        self.top_of_roi = -1600
-        self.top_of_roi_left = 0
-        self.top_of_roi_right = 0
+        self.mini_rotation = 6.3
+        self.top_of_roi = -1732
+        self.top_of_roi_left = -75
+        self.top_of_roi_right = 161
         self.had_pickle = False
         self.angle_left = -9
         self.angle_right = 9
-        self.center_x_offset = 0
+        self.center_x_offset = 54
         self.last_raw_frame = None
         self.last_frame_time = 0
         self.slowmo = False
@@ -625,9 +627,11 @@ class Processor:
 
                 # ------------- cuts / wipes
                 if frame_count == 1:
-                    # Jump ahead to the first camera if it's far enough away
-                    if current_camera.time - frame_time > 5000:
-                        self.set_time(current_camera.time)
+                    # Jump ahead to the start (the first camera, or the first recorded one on an
+                    # autotrack path) if it's far enough away
+                    start_time = self.camera_path.get_start_time()
+                    if start_time - frame_time > 5000:
+                        self.set_time(start_time)
                         continue
                     # if we happen to be cutting to a camera as we also change files....
                     if current_camera.cut_to:
