@@ -17,7 +17,7 @@ import cv2
 import numpy as np
 
 from .human import HumanPath
-from .simple_methods import DETS, PKL
+from .games import GAMES
 from util import rotate_point
 
 OUT = (1920, 720)
@@ -54,10 +54,12 @@ def main():
     ap.add_argument("out")
     ap.add_argument("start", type=float)
     ap.add_argument("duration", type=float)
+    ap.add_argument("--game", default="g1")
     args = ap.parse_args()
 
-    human = HumanPath(PKL)
-    meta = json.load(open(os.path.join(DETS, "meta.json")))
+    cfg = GAMES[args.game]
+    human = HumanPath(cfg["pkl"])
+    meta = json.load(open(os.path.join(cfg["dets"], "meta.json")))
     p = np.load(args.pred)
     files = meta["files"]
     start_ms = args.start * 1000
