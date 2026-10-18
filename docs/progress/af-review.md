@@ -385,3 +385,50 @@ Your answers that shape it:
   zones 793/2129, mini-view 3384/2020, rotation 6.3. The zones and mini-view rotation
   come only from the two games where you had set them.
 - Tests: `tests/test_camerapath.py` (3) and `tests/test_autotrack.py` (4) all pass.
+
+### Stage B: confidence and review segments (done)
+
+`af/confidence.py`. Each sample gets a **review score = expected error × P(live play)**.
+
+- **Expected error:**
+  - The inputs are how sure the camera is (the q10–q90 spread of quantile models, and
+    disagreement within a 5-model ensemble), how fast the path moves, the player count
+    and its stability, distance from the median player, and the usual features.
+  - A LightGBM error model maps those inputs to the expected error.
+  - It's trained across games: each game's inputs and errors come from models trained on
+    the *other* game.
+- **P(live):** a classifier for "would the operator be framing now?". It matters a lot:
+  without it the top segments landed in stoppages and intermissions, and 5 minutes of
+  review did no better than random. Cross-game AUC is 0.94 on G1 and 0.97 on G2.
+- **Segments:**
+  - Flag where the 3 s smoothed score is in the top 20%.
+  - Merge flagged stretches less than 5 s apart, pad each by 2 s, and drop any shorter
+    than 3 s.
+  - Rank by total expected error.
+  - Each segment gets a reason: fast transition, unsure where play is, models disagree,
+    or player detections unstable.
+
+**Review curve** (each game scored by models that never saw it; reviewing = replacing
+the auto path with yours inside the chosen segments):
+
+| Minutes reviewed | G1 MAE | G2 MAE | Best possible (G1 / G2) | Within 300 px (G2) |
+|---|---|---|---|---|
+| 0 | 179 | 180 | | 82% |
+| 3 | 162 | 158 | 146 / 143 | 85% |
+| 5 | 148 | 147 | 127 / 128 | 86% |
+| 10 | 122 | 119 | 89 / 88 | 90% |
+| 15 | 96 | 90 | 59 / 58 | 93% |
+| 20 | 76 | 84 | 40 / 48 | 93% |
+
+**Suggested tiers:** first pass 5 min (about 180 → 148), second pass +5 min (→ about
+120), third pass +10 min (→ about 80).
+
+**In autotrack:**
+- `autotrack.py train` also saves the review models: `models/review_*.txt` plus
+  `review_models.json`.
+- `autotrack.py DIR` writes `DIR\review.json`, listing every segment best first with
+  t0, t1, score, expected px, P(live) and reason.
+- The app splits segments into tiers after you set the start point, so warm-up segments
+  don't use up review time.
+- On G2's videos with no pkl (`D:\temp\af\render_g2`), it found 87 segments in 12 s.
+  The reasons: 71 fast transition, 13 unsure, 2 models disagree, 1 detections unstable.

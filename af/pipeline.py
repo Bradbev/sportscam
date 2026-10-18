@@ -5,7 +5,8 @@ import time
 
 from .calibration import load_calibration, video_files
 from .extract_dets import detect, probe
-from .export import make_sidecar, write_sidecar
+from . import confidence as C
+from .export import make_sidecar, write_review, write_sidecar
 from .game import CACHE_NAME, Game
 from .icemask import build_cache
 from . import model as M
@@ -52,6 +53,20 @@ def run(video_dir, cache_dir=None, model_path=M.DEFAULT_MODEL):
             else "defaults"}
     dst = write_sidecar(video_dir, make_sidecar(g.calib, g.t, pred, g.max_x, info))
     print(f"wrote {dst} ({len(g.t) / HZ / 60:.0f} min of video)")
+    review = C.ReviewModels.load()
+    if review is None:
+        print("no review models in models/; skipping review.json (autotrack.py train makes them)")
+    else:
+        score, err, live, S = review.score(g, pred)
+        segs = C.segments(g.t, score)
+        reasons = C.describe(g.t, S, review.names, segs)
+        entries = []
+        for (t0, t1, total), why in zip(segs, reasons):
+            m = (g.t >= t0) & (g.t <= t1)
+            entries.append({"kind": "camera", "t0": t0, "t1": t1, "score": round(total),
+                            "expected_px": round(float(err[m].mean())), "live": round(float(live[m].mean()), 2),
+                            "reason": why})
+        print(f"wrote {write_review(video_dir, entries)} ({len(entries)} segments)")
     if g.human is not None:
         from .metrics import evaluate, fmt
         print(fmt("  vs the hand-tracked path in this folder", evaluate(g.t, pred, g.human)))
@@ -68,3 +83,5 @@ def train(specs, model_path=M.DEFAULT_MODEL):
     M.save(m, games[0].names, model_path, [g.video_dir for g in used])
     n = sum(g.use.sum() for g in used) / HZ / 60
     print(f"trained on {len(used)} games ({n:.0f} hand-tracked min) -> {model_path}")
+    C.train(used).save()
+    print(f"review models -> {C.MODELS}")

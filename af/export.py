@@ -9,6 +9,7 @@ operator's own `<first video>.pkl`.
 """
 
 import argparse
+import json
 import os
 import pickle
 import time
@@ -20,6 +21,7 @@ from camerapath import CameraPath
 from cameratarget import CameraTarget
 
 SIDECAR = "auto_path.pkl"
+REVIEW = "review.json"
 
 
 def make_sidecar(calib, times_ms, xs, max_x, info=None, step_ms=1000):
@@ -42,6 +44,20 @@ def write_sidecar(video_dir, sidecar):
     tmp = dst + ".tmp"
     with open(tmp, "wb") as f:
         pickle.dump(sidecar, f)
+    os.replace(tmp, dst)
+    return dst
+
+
+def write_review(video_dir, entries):
+    """DIR/review.json: what the app's review mode steps through, best first.
+
+    Each entry has kind ("camera", later "goal"/"faceoff"/...), t0/t1 in source ms,
+    and kind-specific fields.  Tiers are worked out by the app, after the start
+    point is known, so warm-up segments never use up review time."""
+    dst = os.path.join(video_dir, REVIEW)
+    tmp = dst + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"version": 1, "created": time.strftime("%Y-%m-%d %H:%M:%S"), "entries": entries}, f, indent=1)
     os.replace(tmp, dst)
     return dst
 
