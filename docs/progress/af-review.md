@@ -559,3 +559,49 @@ A render (`-r`) then starts at your `T` point and skips the cut intermissions.
 outputs; your own pkl there isn't touched. To run it on your new game, run
 `autotrack.py D:\RawVideo\2026-10-18` again from this worktree (seconds, since detection
 is cached) and open it the same way.
+
+### Fixes after the first real use (2026-10-19, game 2026-10-18)
+
+What happened:
+- You chose menu option 2 (edit), which never shows review.
+- Your pkl kept the camera path from the first autotrack run, because the sidecar is only
+  copied in once. So it had no scores or bookmarks.
+- A goal you middle-clicked in review only changed that one point.
+- The scoreboard wasn't used for this game.
+
+Changes:
+- **Menu:** review is item 1 and the default (Enter). The menu shows the start, end,
+  review progress, and whether a newer auto path is waiting. Option 2 says
+  "R switches to review".
+- **`R`** switches between review and edit inside the app. Edit mode shows a hint when
+  review items exist.
+- **Timeline** moved to just under the status lines, because the window can be taller
+  than the screen.
+- **Refresh:** when autotrack has been re-run (the sidecar's `created` differs from the
+  game pkl's `auto_path_created`) and the game's path is an auto path, the app takes the
+  new path and keeps the game's own points:
+  - start, review fixes, cut and restart markers, and the end;
+  - removed stretches inside cuts, and nothing after the end;
+  - goal decisions, replayed.
+
+  It makes a backup first: `<game>.pkl.before-refresh`.
+- **Goal decisions are saved** in `review_goal_changes`. Goals typed into the old app
+  (one point scored, the rest not) are recognised and converted. Any within 60 s of a
+  goal the new path already has are dropped, so they don't count twice: your 30:06 goal
+  matched the board's 30:45 goal.
+- **Goals entered in review mode** (middle click, or `[ { ] }`) change the score from
+  that moment on, and neither click moves the camera.
+- **Cut items** already covered by a cut in the path count as reviewed.
+- **Scoreboard:** the clock-running threshold assumed a stopped clock at the 20th
+  percentile. This game's clock runs about 90% of the time, so running stretches dropped
+  out and no periods were found. The threshold is now half the running level, giving
+  periods 197–1159, 1321–2283 and 2449–3411 s. G1 and G2 are unchanged.
+- **Faceoff check:** a centre faceoff within 30 s *before* a board goal counts as
+  explained, because the board updates late.
+- **Accuracy line:** "vs the hand-tracked path" is skipped when the folder's path is
+  mostly auto.
+
+**2026-10-18 result:** the board gives 6 goals at the right times, checked frame by
+frame against the board: 4-2 to the Bombshells. Your copy refreshed to 2-4 in the app's
+team order, with all goal and period bookmarks, and kept your start 3:09, both cuts, the
+30:06 point and the end 57:21. Tests: 15 pass.

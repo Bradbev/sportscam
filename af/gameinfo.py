@@ -56,7 +56,8 @@ def board_periods(g, crops):
     cnt = median_filter(g.X[:, g.names.index("cnt@0")], int(30 * 5), mode="nearest")
     spans = []
     for a, b in _runs(run):
-        if (b - a) < 60 * 5 or np.median(cnt[a:b]) < 9:
+        # keep short runs (a few dropouts in the clock signal), the gaps are bridged below
+        if (b - a) < 3 * 5 or np.median(cnt[a:b]) < 9:
             continue
         t0, t1 = g.t[a], g.t[min(b, len(g.t)) - 1]
         if spans and t0 - spans[-1][1] < BRIDGE_S * 1000:
@@ -138,7 +139,7 @@ def analyse(g, pred):
             openers.add(after[0])
     goal_times = [gl["t"] for gl in goals]
     centre = [f for f in all_centre if f["t"] not in openers
-              and not any(0 <= f["t"] - t <= 150000 for t in goal_times)]
+              and not any(-30000 <= f["t"] - t <= 150000 for t in goal_times)]  # the board can update late
     cuts = [(periods[k][1] + 5000, periods[k + 1][0] - 10000) for k in range(len(periods) - 1)]
     return {"board_ok": board_ok, "periods": periods, "goals": goals, "scored": scored,
             "home_team": home_team, "side_votes": side_votes, "centre_faceoffs": centre, "cuts": cuts}

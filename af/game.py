@@ -33,7 +33,9 @@ class Game:
         self.files = meta["files"]
         self.w, self.h = self.files[0]["w"], self.files[0]["h"]
         self.max_x = max_x(self.calib, self.w, self.h)
-        has_path = pkl is not None and len(pkl["camera_path"].camera_targets) > 1
+        # hand-tracked: a camera path that is mostly recorded (an autotrack path under review isn't)
+        ct = pkl["camera_path"].camera_targets if pkl is not None else []
+        has_path = len(ct) > 1 and sum(getattr(c, "source", "human") == "auto" for c in ct) < len(ct) / 2
         self.human = HumanPath(pkl) if has_path else None
         if self.human is not None:
             self.human.set_frame_size(self.w, self.h)

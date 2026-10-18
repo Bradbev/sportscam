@@ -17,7 +17,8 @@ import gamestate
 from highlight import Highlights
 import logo_player
 from util import rotate_image, rotate_image_crop, rotate_point
-from review import ReviewSession, LEAD_IN_MS, PAUSE_AFTER_MS
+from review import (LEAD_IN_MS, PAUSE_AFTER_MS, REVIEW_JSON, ReviewSession, apply_goal, drop_known_goals, goal_bookmarks,
+                    is_auto, legacy_goal_changes, refresh_path)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("basepath", help="Base path to begin video processing from")
@@ -77,6 +78,8 @@ def show_keys():
     print("\t= / -  - next / previous segment (plays from 3s before, pauses after)")
     print("\tEnter  - segment OK / yes it's a goal / cut this intermission")
     print("\tBackspace - not a goal / keep this intermission")
+    print("\tmiddle click, [ { ] } - add / take back a goal from here on")
+    print("\tR      - switch between review and edit")
     print("\ta      - re-record: replaces the path only while recording")
     print("\tT      - start: rendering begins here (do this at the first faceoff)")
     print("\tY      - end: nothing after here is rendered")
@@ -160,25 +163,40 @@ def start_menu():
             print(f"no .mp4 files in {basePath}")
             exit(1)
         game = load_pkl(str(Path(raw[0]).with_suffix("")) + ".pkl")
-        auto = path.exists(path.join(basePath, AUTO_PATH_PKL))
-        review_json = path.join(basePath, "review.json")
-        n_review = len(json.load(open(review_json))["entries"]) if path.exists(review_json) else 0
+        auto = load_pkl(path.join(basePath, AUTO_PATH_PKL))
+        review_json = path.join(basePath, REVIEW_JSON)
+        entries = json.load(open(review_json))["entries"] if path.exists(review_json) else []
+        done = set(game.get("review_done", [])) if game is not None else set()
         print(f"\n{basePath}: {len(raw)} videos")
         if game is not None:
-            ct = game["camera_path"].camera_targets
-            n_auto = sum(getattr(c, "source", "human") == "auto" for c in ct)
-            print(f"  game pkl: {len(ct)} camera points ({n_auto} auto, {len(ct) - n_auto} recorded)")
+            cp = game["camera_path"]
+            ct = cp.camera_targets
+            n_auto = sum(is_auto(c) for c in ct)
+            line = f"  game pkl: {len(ct)} camera points ({n_auto} auto, {len(ct) - n_auto} recorded)"
+            if ct and n_auto and any(not is_auto(c) and getattr(c, "source", "") == "human" for c in ct):
+                line += f", starts {ms_str(cp.get_start_time())}, ends {ms_str(cp.get_last_cam_time())}"
+            print(line)
         else:
             print("  game pkl: none yet (calibration defaults)")
-        print(f"  autotrack: {'auto path ready' if auto else 'not run'}"
-              + (f", {n_review} review segments" if n_review else ""))
-        print("  1) review the auto path, least certain parts first" if auto else "  1) review (run autotrack first)")
-        print("  2) edit / record")
+        if auto is None:
+            print("  autotrack: not run")
+        else:
+            print(f"  autotrack: auto path from {auto.get('autotrack', {}).get('created', '?')}"
+                  + (f", {len(entries)} review items ({len(done & {e['t0'] for e in entries})} reviewed)" if entries else ""))
+            if game is not None and ct and n_auto and auto.get("autotrack", {}).get("created") != game.get("auto_path_created"):
+                print("    (newer than this game's copy: it is refreshed on opening, keeping your edits)")
+        if auto is not None:
+            print("  1) REVIEW the auto path, least certain parts first   [Enter]")
+        else:
+            print("  1) review (run autotrack first)")
+        print("  2) edit / record (no review items shown; R switches to review)")
         print("  3) render")
         print("  4) run autotrack (about 50 min per game; re-runs take seconds)")
         print("  q) quit")
         choice = input("> ").strip().lower()
-        if choice == "1" and auto:
+        if choice == "" and auto is not None:
+            choice = "1"
+        if choice == "1" and auto is not None:
             review_mode = True
             return
         if choice == "2":
@@ -244,21 +262,61 @@ class Processor:
             self.highlights = loaded["highlights"]
             self.highlights.active_save_highlight = None
 
-        # autotrack.py writes its path to a sidecar; take it once, while this game has no camera path yet
-        auto = load_pkl(path.join(path.dirname(self.filename), AUTO_PATH_PKL))
-        if auto is not None and len(self.camera_path.camera_targets) == 0:
-            if loaded is None:
-                self.load_camera_config_pickle(auto)  # the calibration the path was computed with
-            self.camera_path = auto["camera_path"]
-            if not self.bookmark_times_ms:
-                self.bookmark_times_ms = list(auto.get("bookmark_times_ms", []))  # periods and goals
-            print(f"Loaded {len(self.camera_path.camera_targets)} auto camera targets from {AUTO_PATH_PKL}")
-
         self.review_done = loaded.get("review_done", []) if loaded is not None else []
+        self.goal_changes = list(loaded.get("review_goal_changes", [])) if loaded is not None else []
+        self.auto_path_created = loaded.get("auto_path_created") if loaded is not None else None
+
+        # autotrack.py writes its path to a sidecar.  Take it while this game has no camera
+        # path yet; when autotrack has been re-run since, refresh an auto path in place,
+        # keeping this game's own edits (start/end, cuts, re-recordings, goal decisions).
+        auto = load_pkl(path.join(path.dirname(self.filename), AUTO_PATH_PKL))
+        if auto is not None:
+            created = auto.get("autotrack", {}).get("created")
+            targets = self.camera_path.camera_targets
+            if len(targets) == 0:
+                if loaded is None:
+                    self.load_camera_config_pickle(auto)  # the calibration the path was computed with
+                self.camera_path = auto["camera_path"]
+                if not self.bookmark_times_ms:
+                    self.bookmark_times_ms = list(auto.get("bookmark_times_ms", []))  # periods and goals
+                self.auto_path_created = created
+                print(f"Loaded {len(self.camera_path.camera_targets)} auto camera targets from {AUTO_PATH_PKL}")
+            elif any(is_auto(c) for c in targets) and created != self.auto_path_created:
+                import shutil
+                backup = self.filename + ".pkl.before-refresh"
+                shutil.copy2(self.filename + ".pkl", backup)
+                print(f"Auto path re-run since this game was saved: refreshing (backup: {backup})")
+                if loaded is not None and "review_goal_changes" not in loaded:
+                    # goals typed in before they were recorded as changes: drop the ones the
+                    # new path already has, or they'd count twice
+                    self.goal_changes, dropped = drop_known_goals(legacy_goal_changes(targets),
+                                                                  auto["camera_path"].camera_targets)
+                    for t, team, _ in dropped:
+                        print(f"  your goal at {ms_str(t)} is already in the auto path (scoreboard); not added twice")
+                n_edits = sum(not is_auto(c) for c in targets)
+                self.camera_path.camera_targets = refresh_path(targets, auto["camera_path"].camera_targets,
+                                                               self.goal_changes)
+                own = [b for b in self.bookmark_times_ms if not b[1].startswith(("goal", "period"))]
+                periods = [b for b in auto.get("bookmark_times_ms", []) if b[1].startswith("period")]
+                self.bookmark_times_ms = goal_bookmarks(self.camera_path.camera_targets, own + periods)
+                self.auto_path_created = created
+                final = self.camera_path.camera_targets[-1].game_state
+                print(f"Refreshed the auto path from {AUTO_PATH_PKL} ({created}): kept {n_edits} edits and "
+                      f"{len(self.goal_changes)} goal changes; score now {final.score[0]}-{final.score[1]}")
+
         self.review = None
+        self.review_available = path.exists(path.join(path.dirname(self.filename), REVIEW_JSON))
         if review_mode:
-            self.review = ReviewSession(path.dirname(self.filename), self.review_done)
-            print(f"Review: {len(self.review.entries)} segments in review.json")
+            self.start_review()
+
+    def start_review(self):
+        self.review = ReviewSession(path.dirname(self.filename), self.review_done)
+        # an intermission already cut (by hand, or before autotrack was re-run) needs no review
+        cuts = [c.time for c in self.camera_path.camera_targets if c.cut_to]
+        for e in self.review.entries:
+            if e.get("kind") == "cut" and any(abs(t - e["t0"]) < 30000 for t in cuts):
+                self.review.done.add(e["t0"])
+        print(f"Review: {len(self.review.entries)} items in {REVIEW_JSON}")
 
     def load_camera_config_pickle(self, pkl):
         self.top_of_roi = pkl["top_of_roi"]
@@ -299,6 +357,8 @@ class Processor:
             "auto_record":self.auto_record,
             "highlights":self.highlights,
             "review_done": sorted(self.review.done) if self.review is not None else self.review_done,
+            "review_goal_changes": self.goal_changes,
+            "auto_path_created": self.auto_path_created,
             # processing state
             "rendered" : writeOutputFile and finished,
             "finished" : finished,
@@ -357,23 +417,11 @@ class Processor:
         return path_.get_start_time(), start_set, path_.get_last_cam_time()
 
     def adjust_goal(self, t, team, delta):
-        """Add (+1) or take back (-1) a goal for score index `team` from time t on, and
-        rewrite the goal bookmarks to match."""
-        for c in self.camera_path.camera_targets:
-            if c.time >= t:
-                gs = c.game_state.copy()
-                score = list(gs.score)
-                score[team] = max(0, score[team] + delta)
-                gs.score = tuple(score)
-                c.game_state = gs
-        marks = [b for b in self.bookmark_times_ms if not b[1].startswith("goal")]
-        prev = (0, 0)
-        for c in self.camera_path.camera_targets:
-            s = c.game_state.score
-            if sum(s) > sum(prev):
-                marks.append((c.time, f"goal {s[0]}-{s[1]}"))
-            prev = s
-        self.bookmark_times_ms = sorted(marks)
+        """Add (+1) or take back (-1) a goal for score index `team` from time t on, rewrite
+        the goal bookmarks to match, and remember it so a refreshed auto path keeps it."""
+        apply_goal(self.camera_path.camera_targets, t, team, delta)
+        self.bookmark_times_ms = goal_bookmarks(self.camera_path.camera_targets, self.bookmark_times_ms)
+        self.goal_changes.append((t, team, delta))
 
     def handle_review_keys(self, key, frame_time):
         """Review-mode keys; returns True when the key was handled here."""
@@ -440,9 +488,27 @@ class Processor:
                 self.paused = False
                 r.record_from = frame_time - 1
             return True
+        score_keys = {ord('['): ((1, 0), 1), ord('{'): ((1, 0), -1), ord(']'): ((0, 1), 1), ord('}'): ((0, 1), -1)}
+        if key in score_keys:  # the score changes from here on, not just on the next recorded point
+            side, delta = score_keys[key]
+            self.adjust_goal(frame_time, self.team_for(side), delta)
+            return True
         return False
 
+    def team_for(self, side):
+        """Score index for a (left, right) delta, as GameState.adjust_score maps it this period."""
+        l, _ = self.game_state._get_lr(side)
+        return 0 if l else 1
+
     def handle_keys(self, key, frame_time):
+        if key == ord('R'):  # switch between review and edit without restarting
+            if self.review is None:
+                self.start_review()
+            else:
+                self.review_done = sorted(self.review.done)
+                self.review = None
+                self.auto_record = False
+            return
         if self.review is not None and key != 255 and self.handle_review_keys(key, frame_time):
             return
 
@@ -844,6 +910,13 @@ class Processor:
                         logo_manager.do_wipe_then(jump_to_next_camera)
 
                 mouse_click = mouse_left_click or mouse_right_click or mouse_middle_click
+                if self.review is not None and (mouse_middle_click or mouse_right_click) and not mouse_left_click:
+                    # review: a goal counts from here on (and survives a refreshed auto path);
+                    # neither click moves the camera
+                    if mouse_middle_click:
+                        attribute_to_left_team = clamped_mouse_x > (max_x//2 + self.center_x_offset)
+                        self.adjust_goal(frame_time, self.team_for((1, 0) if attribute_to_left_team else (0, 1)), +1)
+                    mouse_middle_click = mouse_right_click = mouse_click = False
                 if mouse_click or (self.auto_record and frame_time > self.last_auto_time + 1000):
                     attribute_to_left_team = clamped_mouse_x > (max_x//2 + self.center_x_offset)
                     if mouse_right_click:
@@ -968,7 +1041,11 @@ class Processor:
                         start, start_set, end = self.review_start_end()
                         for k, line in enumerate(self.review.status_lines(frame_time, start, start_set, end)):
                             cv2.putText(frame, line, (0, text_y + 50 * (3 + k)), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
-                        self.review.draw_timeline(frame, frame_time, total_vid_time, start, end, frame.shape[0] - 46)
+                        # under the status lines: the window can be taller than the screen
+                        self.review.draw_timeline(frame, frame_time, total_vid_time, start, end, text_y + 50 * 5 - 20)
+                    elif self.review_available:
+                        cv2.putText(frame, "review items available: R for review mode", (0, text_y + 50 * 3),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
 
                     cv2.imshow('frame',frame)
 

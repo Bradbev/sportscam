@@ -123,8 +123,10 @@ def clock_running(clock_frames, hz=5):
     f = clock_frames.astype(np.float32)
     d = np.zeros(len(f))
     d[hz:] = np.abs(f[hz:] - f[:-hz]).mean(axis=(1, 2))
-    base = np.percentile(d, 20)
-    return uniform_filter1d(d, 2 * hz) > base + 0.35 * (np.percentile(d, 80) - base)
+    s = uniform_filter1d(d, 2 * hz)
+    # half the running level: the clock runs most of a game (70-90% of samples), so the
+    # 80th percentile is a running level; a stopped clock changes by a third of that or less
+    return s > 0.5 * np.percentile(s, 80)
 
 
 def main():

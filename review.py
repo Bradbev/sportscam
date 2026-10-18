@@ -18,6 +18,85 @@ LEAD_IN_MS = 3000   # playback starts this long before a segment
 PAUSE_AFTER_MS = 1000
 
 
+def is_auto(c):
+    return getattr(c, "source", "human") == "auto"
+
+
+def apply_goal(targets, t, team, delta):
+    """Add (+1) / take back (-1) a goal for score index `team` on every target from t on."""
+    for c in targets:
+        if c.time >= t:
+            gs = c.game_state.copy()
+            score = list(gs.score)
+            score[team] = max(0, score[team] + delta)
+            gs.score = tuple(score)
+            c.game_state = gs
+
+
+def goal_bookmarks(targets, bookmarks):
+    """bookmarks with the goal entries rebuilt from where the score goes up along the path."""
+    marks = [b for b in bookmarks if not b[1].startswith("goal")]
+    prev = (0, 0)
+    for c in targets:
+        s = c.game_state.score
+        if sum(s) > sum(prev):
+            marks.append((c.time, f"goal {s[0]}-{s[1]}"))
+        prev = s
+    return sorted(marks)
+
+
+def legacy_goal_changes(targets):
+    """Goals typed in by hand before they were recorded as changes: a recorded point whose
+    score is ahead of the point before it (the change never reached later points)."""
+    out = []
+    for prev, c in zip(targets, targets[1:]):
+        if is_auto(c):
+            continue
+        for team in (0, 1):
+            if c.game_state.score[team] > prev.game_state.score[team]:
+                out.append((c.time, team, c.game_state.score[team] - prev.game_state.score[team]))
+    return out
+
+
+def drop_known_goals(changes, new_targets, window_ms=60000):
+    """(kept, dropped): typed-in goals the re-run path already has (the scoreboard saw them)."""
+    goal_times, prev = [], (0, 0)
+    for c in new_targets:
+        if sum(c.game_state.score) > sum(prev):
+            goal_times.append(c.time)
+        prev = c.game_state.score
+    kept, dropped = [], []
+    for ch in changes:
+        near = ch[2] > 0 and any(abs(ch[0] - t) <= window_ms for t in goal_times)
+        (dropped if near else kept).append(ch)
+    return kept, dropped
+
+
+def refresh_path(old_targets, new_targets, goal_changes=()):
+    """A re-run sidecar's path, with this game's own edits carried over.
+
+    Kept from the old path: every point that isn't auto (start, review fixes, cut and
+    restart markers, recordings), the cuts (auto points between a cut point and the
+    next edit are removed), the end (nothing after a final edit), and goal decisions
+    (replayed as score changes).  Scores and periods otherwise come from the new path."""
+    from camerapath import CameraPath
+    path = CameraPath()
+    path.camera_targets = list(new_targets)
+    edits = [c for c in old_targets if not is_auto(c)]
+    for c in edits:
+        _, _, nxt = path.get_camera_at_time(c.time)
+        c.game_state = nxt.game_state.copy()
+        path.replace_range(c.time - 500, c.time + 500, [c])
+    for a, b in zip(edits, edits[1:]):
+        if a.cut_to:
+            path.replace_range(a.time + 1, b.time - 1, [])
+    if old_targets and not is_auto(old_targets[-1]):
+        path.replace_range(old_targets[-1].time + 1, float("inf"), [])
+    for t, team, delta in goal_changes:
+        apply_goal(path.camera_targets, t, team, delta)
+    return path.camera_targets
+
+
 def fmt_ms(ms):
     s = int(ms // 1000)
     h, m, s = s // 3600, s // 60 % 60, s % 60
