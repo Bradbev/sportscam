@@ -90,6 +90,8 @@ def cross_val_predict(X, y, groups, folds, params):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--folds", type=int, default=6)
+    ap.add_argument("--holdout-from", type=float, default=0,
+                    help="also train on t < this (s) and test on t >= this, e.g. 3093 = period 3")
     args = ap.parse_args()
 
     human = HumanPath(PKL)
@@ -117,6 +119,16 @@ def main():
         v = uniform_filter1d(full, int(sm * HZ), mode="nearest")
         print(fmt(f"lgbm cv sm{sm}", evaluate(t, v, human)))
     np.savez(r"D:/temp/af/learned_cv.npz", t=t, pred=full)
+
+    if args.holdout_from:
+        import lightgbm as lgb
+        cut = args.holdout_from * 1000
+        tr = use & (t < cut)
+        m = lgb.LGBMRegressor(**params, verbose=-1).fit(X[tr], human.x_at(t[tr]))
+        ph = uniform_filter1d(np.clip(m.predict(X), 0, human.max_x), int(2 * HZ), mode="nearest")
+        test = lambda g: g >= cut
+        print(fmt(f"lgbm holdout>= {args.holdout_from:.0f}s sm2", evaluate(t, ph, human, mask=test)))
+        print(fmt("  (cv preds, same span)", evaluate(t, uniform_filter1d(full, int(2 * HZ), mode="nearest"), human, mask=test)))
 
 
 if __name__ == "__main__":
