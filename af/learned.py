@@ -103,6 +103,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--folds", type=int, default=6)
     ap.add_argument("--motion", action="store_true")
+    ap.add_argument("--tracked", action="store_true", help="track-smoothed velocities")
     ap.add_argument("--out", default=r"D:/temp/af/learned_cv.npz")
     ap.add_argument("--holdout-from", type=float, default=0,
                     help="also train on t < this (s) and test on t >= this, e.g. 3093 = period 3")
@@ -116,8 +117,9 @@ def main():
     xs = det.per_sample(keep)
     extra, enames = None, ()
     if args.motion:
-        from .motion import summarise, velocities
-        extra, enames = summarise(velocities(det, keep, with_x=True))
+        from .motion import summarise, tracked_velocities, velocities
+        vel = tracked_velocities(det, keep) if args.tracked else velocities(det, keep, with_x=True)
+        extra, enames = summarise(vel)
     X, names = build_features(xs, human.max_x, extra, enames)
 
     scored = human.scored_mask(t)
@@ -126,7 +128,7 @@ def main():
     y = human.x_at(t[use])
     print(f"{use.sum()} labelled samples in {len(np.unique(sid[use]))} segments, {X.shape[1]} features")
 
-    params = dict(n_estimators=400, learning_rate=0.03, num_leaves=15, min_child_samples=40,
+    params = dict(objective="l1", n_estimators=400, learning_rate=0.03, num_leaves=15, min_child_samples=40,
                   subsample=0.8, subsample_freq=1, colsample_bytree=0.7, reg_lambda=1.0)
     p = cross_val_predict(X[use], y, sid[use], args.folds, params)
     p = np.clip(p, 0, human.max_x)
@@ -139,6 +141,15 @@ def main():
         print(fmt(f"lgbm cv sm{sm}", evaluate(t, v, human)))
     np.savez(args.out, t=t, pred=full)
 
+    # Whole-game path: out-of-fold predictions where the human framed (honest),
+    # a model trained on every label elsewhere (warm-up, stoppages, cuts).
+    import lightgbm as lgb
+    m_all = lgb.LGBMRegressor(**params, verbose=-1).fit(X[use], y)
+    game = np.clip(m_all.predict(X), 0, human.max_x)
+    game[use] = p
+    game = uniform_filter1d(game, int(2 * HZ), mode="nearest")
+    np.savez(args.out.replace(".npz", "_game.npz"), t=t, pred=game)
+
     if args.holdout_from:
         import lightgbm as lgb
         cut = args.holdout_from * 1000
@@ -147,6 +158,7 @@ def main():
         ph = uniform_filter1d(np.clip(m.predict(X), 0, human.max_x), int(2 * HZ), mode="nearest")
         test = lambda g: g >= cut
         print(fmt(f"lgbm holdout>= {args.holdout_from:.0f}s sm2", evaluate(t, ph, human, mask=test)))
+        np.savez(args.out.replace(".npz", "_holdout.npz"), t=t, pred=ph, cut_ms=cut)
         print(fmt("  (cv preds, same span)", evaluate(t, uniform_filter1d(full, int(2 * HZ), mode="nearest"), human, mask=test)))
 
 
