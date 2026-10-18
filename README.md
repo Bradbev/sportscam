@@ -8,13 +8,13 @@ Install with `pip install -r requirements.txt`
 # Automatic camera path
 
 `python autotrack.py DIR` detects the players in every video in DIR, predicts the
-camera path a human operator would have recorded and writes it to `DIRuto_path.pkl`.
+camera path a human operator would have recorded and writes it to `DIR\auto_path.pkl`.
 Opening DIR in sportscam.py then starts from that path (it is copied in once, while the
 game has no camera targets of its own).
 
 * Install with `pip install -r requirements-autotrack.txt` (CUDA torch, see the file).
-* Detection takes about 50 min per game on an RTX 4080 and runs at below-normal
-  priority. It is cached in `DIRutotrack_cache` (about 650 MB), so re-running after
+* Detection takes about 50 min per game on an RTX 4080.
+  It is cached in `DIR\autotrack_cache` (about 650 MB), so re-running after
   changing the calibration in the app takes seconds.
 * Calibration comes from the game's pkl if there is one, otherwise the defaults in
   `af/calibration.py`.

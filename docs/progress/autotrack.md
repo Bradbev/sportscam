@@ -8,8 +8,7 @@ fix), without the older `autoframe` branch commits. Worktree:
 
 - **One command:** `python autotrack.py DIR` runs detection, then the ice mask, then
   features, then the saved model, and writes `DIR\auto_path.pkl`. Everything is cached in
-  `DIR\autotrack_cache\`, so a re-run resumes and skips finished files. It runs at low
-  priority by default.
+  `DIR\autotrack_cache\`, so a re-run resumes and skips finished files.
 - **Always a sidecar.** The tracker never writes `DIR\<first video>.pkl`.
 - **App copies the sidecar in once.** If the main pkl has no camera targets and
   `auto_path.pkl` exists, the app loads that camera path. If there was no main pkl at
@@ -67,6 +66,9 @@ fix), without the older `autoframe` branch commits. Worktree:
     the reflog for a while.
   - My scratch scripts were archived to `D:\temp\af\scratch_af_archive`.
   - `autoframe` and your other branches were left alone.
+
+- **Your decision:** no low-priority mode, so that code is removed. The README also
+  had two `\a` control characters from my edit; those are fixed.
 
 ### Merging into main
 

@@ -1,8 +1,6 @@
 """autotrack steps: detect -> ice mask -> features -> model -> DIR/auto_path.pkl."""
 
-import ctypes
 import os
-import sys
 import time
 
 from .calibration import load_calibration, video_files
@@ -15,16 +13,6 @@ from .features import HZ
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEIGHTS = os.path.join(REPO, "models", "yolo11x.pt")
-
-
-def low_priority():
-    """Below-normal priority for this process; ffmpeg children inherit it on Windows."""
-    if sys.platform == "win32":
-        BELOW_NORMAL = 0x4000
-        k = ctypes.windll.kernel32
-        k.SetPriorityClass(k.GetCurrentProcess(), BELOW_NORMAL)
-    else:
-        os.nice(10)
 
 
 def ensure_weights(path=WEIGHTS):

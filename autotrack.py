@@ -6,7 +6,7 @@
 
 Detection takes about 50 min per game on an RTX 4080 and is cached in
 DIR/autotrack_cache, so re-runs (e.g. after changing the calibration in the
-app) take seconds.  Runs at below-normal priority unless --normal-priority.
+app) take seconds.
 
 sportscam.py copies auto_path.pkl into the game once, when the game's own pkl
 has no camera targets yet.
@@ -24,20 +24,14 @@ def main():
         ap = argparse.ArgumentParser(prog="autotrack.py train")
         ap.add_argument("dirs", nargs="+")
         ap.add_argument("--model", default=M.DEFAULT_MODEL)
-        ap.add_argument("--normal-priority", action="store_true")
         args = ap.parse_args(sys.argv[2:])
-        if not args.normal_priority:
-            pipeline.low_priority()
         pipeline.train(args.dirs, args.model)
         return
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("dir")
     ap.add_argument("--cache", help="default: DIR/autotrack_cache")
     ap.add_argument("--model", default=M.DEFAULT_MODEL)
-    ap.add_argument("--normal-priority", action="store_true")
     args = ap.parse_args()
-    if not args.normal_priority:
-        pipeline.low_priority()
     pipeline.run(args.dir, args.cache, args.model)
 
 
