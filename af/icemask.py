@@ -93,20 +93,25 @@ def build(frames):
     return med, filled, top_s, bot_s
 
 
-if __name__ == "__main__":
-    import sys
-    path, out_dir = sys.argv[1], sys.argv[2]
-    rotation = float(sys.argv[3]) if len(sys.argv) > 3 else 37.0
+def build_cache(path, out_dir, rotation):
+    """Ice edges from 31 frames spread across one source video, plus preview images."""
     dur = float(subprocess.check_output([
         "ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path]))
     frames = sample_band_frames(path, rotation, np.linspace(30, dur - 30, 31))
     med, mask, top, bot = build(frames)
     os.makedirs(out_dir, exist_ok=True)
-    np.savez(os.path.join(out_dir, "ice_edges.npz"), top=top, bot=bot, band0=ROT_BAND[0])
     cv2.imwrite(os.path.join(out_dir, "median.png"), med)
     cv2.imwrite(os.path.join(out_dir, "ice_mask.png"), mask)
     vis = med.copy()
     cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cv2.drawContours(vis, cnts, -1, (0, 0, 255), 3)
     cv2.imwrite(os.path.join(out_dir, "ice_mask_vis.jpg"), cv2.resize(vis, None, fx=0.3, fy=0.3))
-    print("ice px", int((mask > 0).sum()))
+    np.savez(os.path.join(out_dir, "ice_edges.npz"), top=top, bot=bot, band0=ROT_BAND[0])
+    return int((mask > 0).sum())
+
+
+if __name__ == "__main__":
+    import sys
+    path, out_dir = sys.argv[1], sys.argv[2]
+    rotation = float(sys.argv[3]) if len(sys.argv) > 3 else 37.0
+    print("ice px", build_cache(path, out_dir, rotation))

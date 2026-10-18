@@ -4,16 +4,17 @@ live = scoreboard clock running AND a full complement of players on the ice.
 Short interruptions (stoppages, timeouts) are bridged; long ones (intermissions)
 become cuts.  Compared against the human's spans (pieces between cut_to flags).
 
-  python -m af.phases g1 [g2 ...]
+  python -m af.phases DIR[=CACHE] ...   (needs CACHE/clock.npz from af.clock)
 """
 
+import os
 import sys
 
 import numpy as np
 from scipy.ndimage import median_filter, uniform_filter1d
 
-from .games import Game
-from .simple_methods import HZ
+from .features import HZ
+from .game import open_game
 
 RUN_THRESH = 2.5     # mean |grey diff| of the clock crop over 1 s
 MIN_PLAYERS = 9      # 20 s median of on-ice count; ~13 in play, ~6 in intermissions
@@ -55,13 +56,13 @@ def human_spans(h, min_s=30):
 
 
 def main():
-    for name in sys.argv[1:] or ["g1"]:
-        g = Game(name)
-        d = np.load(f"D:/temp/af/feats/clock_{name}.npz")["diff"]
+    for spec in sys.argv[1:]:
+        g = open_game(spec)
+        d = np.load(os.path.join(g.cache, "clock.npz"))["diff"]
         cnt = g.X[:, g.names.index("cnt@0")]
         auto = live_spans(g.t, d, cnt)
         hum = human_spans(g.human)
-        print(f"== {name}")
+        print(f"== {g.video_dir}")
         print("  human:", "  ".join(f"{a/1000:.0f}-{b/1000:.0f}" for a, b in hum))
         print("  auto: ", "  ".join(f"{a/1000:.0f}-{b/1000:.0f}" for a, b in auto))
         for a, b in hum:

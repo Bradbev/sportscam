@@ -25,8 +25,8 @@ def load_pkl(path):
 
 
 class HumanPath:
-    def __init__(self, pkl_path):
-        self.pkl = load_pkl(pkl_path)
+    def __init__(self, pkl):
+        self.pkl = load_pkl(pkl) if isinstance(pkl, str) else pkl
         self.path = self.pkl["camera_path"]
         ct = self.path.camera_targets
         self.t = np.array([c.time for c in ct], dtype=np.float64)

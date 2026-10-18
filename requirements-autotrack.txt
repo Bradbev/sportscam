@@ -1,0 +1,8 @@
+# autotrack.py, on top of requirements.txt.  torch must be a CUDA build, e.g.
+#   pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+# ffmpeg/ffprobe with NVDEC/NVENC (h264_nvenc) must be on PATH.
+torch==2.6.0
+ultralytics==8.4.120
+lightgbm==4.7.0
+scipy==1.18.1
+scikit-learn==1.9.1

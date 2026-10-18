@@ -5,7 +5,7 @@ already contain it.  The seconds digits change once a second while the clock
 runs and freeze at whistles, so the per-sample difference between the clock
 region now and 1 s earlier is high during play and near zero in stoppages.
 
-  python -m af.clock DETS_DIR X0 Y0 W H OUT.npz     # region in proxy pixels
+  python -m af.clock CACHE/dets X0 Y0 W H CACHE/clock.npz     # region in proxy pixels
 """
 
 import glob

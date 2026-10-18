@@ -1,6 +1,6 @@
 """Debug video: band proxy + detections + human vs auto crop.
 
-  python -m af.debugvid OUT.mp4 START_S END_S [--auto D:/temp/af/learned_cv.npz]
+  python -m af.debugvid OUT.mp4 START_S END_S --game DIR[=CACHE] [--auto PRED.npz]
 
 Green boxes: kept (on ice).  Red: rejected.  Yellow rectangle: human crop.
 Cyan: auto crop.  Bottom strip: x over time (human yellow, auto cyan).
@@ -13,9 +13,8 @@ import os
 import cv2
 import numpy as np
 
-from .human import HumanPath
+from .game import open_game
 from .players import Detections
-from .simple_methods import DETS, EDGES, PKL
 
 SCALE = 0.5  # proxy scale relative to full-res band
 OUT_W = 1920
@@ -27,11 +26,12 @@ def main():
     ap.add_argument("start", type=float)
     ap.add_argument("end", type=float)
     ap.add_argument("--auto", default=None)
+    ap.add_argument("--game", required=True)
     args = ap.parse_args()
 
-    human = HumanPath(PKL)
-    human.set_frame_size(3840, 2880)
-    det = Detections(DETS, EDGES, human.max_x)
+    g = open_game(args.game)
+    human = g.human
+    det = Detections(g.dets, g.edges, g.max_x)
     keep = det.on_ice()
     auto = None
     if args.auto:
@@ -39,8 +39,8 @@ def main():
         auto = (a["t"], a["pred"])
 
     # map sample index -> (proxy file, frame index)
-    files = sorted(glob.glob(os.path.join(DETS, "*_band.mp4")))
-    npzs = sorted(glob.glob(os.path.join(DETS, "*.npz")))
+    files = sorted(glob.glob(os.path.join(g.dets, "*_band.mp4")))
+    npzs = sorted(glob.glob(os.path.join(g.dets, "*.npz")))
     starts = np.cumsum([0] + [len(np.load(f)["times_ms"]) for f in npzs])
 
     i0 = int(np.searchsorted(det.times, args.start * 1000))
@@ -70,7 +70,7 @@ def main():
         for edge in (det.top, det.bot):
             pts = np.stack([cols * SCALE, edge[cols] * SCALE], 1).astype(np.int32)
             cv2.polylines(img, [pts], False, (255, 0, 255), 1)
-        hx = human.x_at([tms])[0] if human.scored_mask([tms])[0] else None
+        hx = human.x_at([tms])[0] if human is not None and human.scored_mask([tms])[0] else None
         h_img = img.shape[0]
         if hx is not None:
             c = k_of(hx)

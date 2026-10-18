@@ -11,7 +11,7 @@ debug overlays and any later pixel-based features.
 Times match FastCap: file k frame n -> sum(frames of files < k) * 40ms + n * 40ms.
 
 Usage:
-  python -m af.extract_dets D:/RawVideo/autoframe D:/temp/af/dets [--stride 5]
+  python -m af.extract_dets VIDEO_DIR OUT_DIR [--stride 5]   (normally run via autotrack.py)
 """
 
 import argparse
@@ -68,35 +68,15 @@ def reader(path, w, h, stride, q):
     p.wait()
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("video_dir")
-    ap.add_argument("out_dir")
-    ap.add_argument("--stride", type=int, default=5)
-    ap.add_argument("--model", default="D:/temp/af/yolo11x.pt")
-    ap.add_argument("--conf", type=float, default=0.10)
-    ap.add_argument("--rotation", type=float, default=None, help="default: from the pkl")
-    ap.add_argument("--max-frames", type=int, default=0)
-    args = ap.parse_args()
-
+def detect(files, out_dir, rotation, weights, stride=5, conf=0.10, max_frames=0):
+    """Detect people in every file (skipping files already cached) and write meta.json."""
     from ultralytics import YOLO
-    os.makedirs(args.out_dir, exist_ok=True)
-
-    files = sorted(f for f in glob.glob(os.path.join(args.video_dir, "*.MP4"))
-                   + glob.glob(os.path.join(args.video_dir, "*.mp4"))
-                   if "_processed" not in f)
-    files = sorted({os.path.normcase(f): f for f in files}.values(), key=os.path.normcase)
-    rotation = args.rotation
-    if rotation is None:
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        import pickle
-        pk = pickle.load(open(os.path.splitext(files[0])[0] + ".pkl", "rb"))
-        rotation = pk["rotation"]
-
-    model = YOLO(args.model)
+    os.makedirs(out_dir, exist_ok=True)
+    args = argparse.Namespace(out_dir=out_dir, stride=stride, conf=conf, max_frames=max_frames, model=weights)
+    model = None
     base_ms = 0.0
     meta = {"files": [], "rotation": rotation, "band": ROT_BAND, "stride": args.stride,
-            "model": args.model, "conf": args.conf}
+            "model": os.path.basename(args.model) if isinstance(args.model, str) else "yolo11x.pt", "conf": args.conf}
     for path in files:
         w, h, fps, nframes = probe(path)
         frame_ms = 1000.0 / fps
@@ -109,6 +89,8 @@ def main():
             base_ms += nframes * frame_ms
             continue
 
+        if model is None:
+            model = YOLO(args.model() if callable(args.model) else args.model)
         M, rot_w = band_matrix(w, h, rotation, ROT_BAND[0])
         band_h = ROT_BAND[1] - ROT_BAND[0]
         imgsz = int(np.ceil(rot_w / 32) * 32)
@@ -150,6 +132,8 @@ def main():
                 break
         proxy.stdin.close()
         proxy.wait()
+        if k == 0:
+            raise SystemExit(f"could not decode any frames from {path}; nothing cached")
 
         np.savez_compressed(
             out_npz, times_ms=np.array(times), counts=np.array(counts, dtype=np.int32),
@@ -162,6 +146,21 @@ def main():
 
     with open(os.path.join(args.out_dir, "meta.json"), "w") as f:
         json.dump(meta, f, indent=1)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("video_dir")
+    ap.add_argument("out_dir")
+    ap.add_argument("--stride", type=int, default=5)
+    ap.add_argument("--model", default="models/yolo11x.pt")
+    ap.add_argument("--conf", type=float, default=0.10)
+    ap.add_argument("--rotation", type=float, default=None, help="default: from the calibration")
+    ap.add_argument("--max-frames", type=int, default=0)
+    args = ap.parse_args()
+    from .calibration import load_calibration, video_files
+    rotation = args.rotation if args.rotation is not None else load_calibration(args.video_dir)[0]["rotation"]
+    detect(video_files(args.video_dir), args.out_dir, rotation, args.model, args.stride, args.conf, args.max_frames)
 
 
 if __name__ == "__main__":

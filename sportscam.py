@@ -119,6 +119,8 @@ def mouse_callback(event, x, y, flags, param):
         case cv2.EVENT_RBUTTONDOWN:
             mouse_right_click = True
 
+AUTO_PATH_PKL = "auto_path.pkl"  # written by autotrack.py
+
 def load_pkl(filename):
     try:
         with open(filename, "rb") as f:
@@ -179,6 +181,14 @@ class Processor:
             self.camera_path = loaded["camera_path"]
             self.highlights = loaded["highlights"]
             self.highlights.active_save_highlight = None
+
+        # autotrack.py writes its path to a sidecar; take it once, while this game has no camera path yet
+        auto = load_pkl(path.join(path.dirname(self.filename), AUTO_PATH_PKL))
+        if auto is not None and len(self.camera_path.camera_targets) == 0:
+            if loaded is None:
+                self.load_camera_config_pickle(auto)  # the calibration the path was computed with
+            self.camera_path = auto["camera_path"]
+            print(f"Loaded {len(self.camera_path.camera_targets)} auto camera targets from {AUTO_PATH_PKL}")
 
     def load_camera_config_pickle(self, pkl):
         self.top_of_roi = pkl["top_of_roi"]

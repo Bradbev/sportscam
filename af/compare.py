@@ -4,48 +4,19 @@ Crops are produced with the same geometry as sportscam.py's render path
 (rotation + per-x angle, y from the calibration, rotate_point correction),
 warping only the 1920x720 crop instead of the whole frame.
 
-  python -m af.compare PRED.npz OUT.mp4 START_S DURATION_S
+  python -m af.compare PRED.npz OUT.mp4 START_S DURATION_S --game DIR[=CACHE]
 """
 
 import argparse
-import json
-import math
-import os
 import subprocess
 
 import cv2
 import numpy as np
 
-from .human import HumanPath
-from .games import GAMES
-from util import rotate_point
+from .game import open_game
+from .geometry import crop_matrix
 
 OUT = (1920, 720)
-
-
-class Cropper:
-    def __init__(self, pkl, w, h):
-        self.c = pkl
-        a = math.radians(pkl["rotation"] + pkl["angle_right"])
-        self.max_x = int(math.sin(a) * h + math.cos(a) * w - OUT[0])
-        self.w, self.h = w, h
-        self.xp = [0, self.max_x // 2 + pkl["center_x_offset"], self.max_x]
-
-    def crop(self, raw, x):
-        c = self.c
-        x = int(np.clip(x, 0, self.max_x))
-        angle = float(np.interp(x, self.xp, [c["angle_left"], 0, c["angle_right"]]))
-        y_live = -c["top_of_roi"] + float(np.interp(x, self.xp, [c["top_of_roi_left"], 0, c["top_of_roi_right"]]))
-        size = np.array([self.w, self.h], dtype=np.float64)
-        M = cv2.getRotationMatrix2D(tuple(size / 2.0), c["rotation"] + angle, 1.0)
-        new = np.abs(M[:, :2]) @ size
-        M[:, -1] += (new - size) / 2.0
-        rot_w = int(new[0])
-        y = int(rotate_point((x + OUT[0] // 2 - rot_w // 2, y_live), -angle)[1])
-        x = int(min(x, rot_w - OUT[0]))
-        M[0, 2] -= x
-        M[1, 2] -= y
-        return cv2.warpAffine(raw, M, OUT)
 
 
 def main():
@@ -54,19 +25,18 @@ def main():
     ap.add_argument("out")
     ap.add_argument("start", type=float)
     ap.add_argument("duration", type=float)
-    ap.add_argument("--game", default="g1")
+    ap.add_argument("--game", required=True, help="DIR[=CACHE] of a hand-tracked game")
     args = ap.parse_args()
 
-    cfg = GAMES[args.game]
-    human = HumanPath(cfg["pkl"])
-    meta = json.load(open(os.path.join(cfg["dets"], "meta.json")))
+    g = open_game(args.game)
+    human = g.human
     p = np.load(args.pred)
-    files = meta["files"]
+    files = g.files
     start_ms = args.start * 1000
     fi = max(i for i, f in enumerate(files) if f["base_ms"] <= start_ms)
     f = files[fi]
     w, h, fps = f["w"], f["h"], f["fps"]
-    crop = Cropper(human.pkl, w, h)
+    crop = lambda raw, x: cv2.warpAffine(raw, crop_matrix(g.calib, w, h, x), OUT)
     local = (start_ms - f["base_ms"]) / 1000.0
     n = int(args.duration * fps)
     dec = subprocess.Popen(["ffmpeg", "-v", "error", "-hwaccel", "cuda", "-ss", f"{local:.3f}", "-i", f["path"],
@@ -85,8 +55,8 @@ def main():
         t = start_ms + k * 1000.0 / fps
         hx = human.x_at([t])[0]
         ax = float(np.interp(t, p["t"], p["pred"]))
-        top = cv2.resize(crop.crop(raw, hx), half, interpolation=cv2.INTER_AREA)
-        bot = cv2.resize(crop.crop(raw, ax), half, interpolation=cv2.INTER_AREA)
+        top = cv2.resize(crop(raw, hx), half, interpolation=cv2.INTER_AREA)
+        bot = cv2.resize(crop(raw, ax), half, interpolation=cv2.INTER_AREA)
         framed = human.scored_mask([t])[0]
         cv2.putText(top, f"HUMAN x={hx:4.0f}" + ("" if framed else " (not framed)"), (10, 25),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)

@@ -1,34 +1,25 @@
-"""Cross-game evaluation of the learned framer.
+"""Cross-game evaluation of the camera-x model on hand-tracked folders.
 
-  python -m af.transfer g1 g2
+  python -m af.transfer DIR[=CACHE] DIR[=CACHE] ...
 
 Reports, for each game: the median baseline, the human path delayed 1 s / 2 s,
 within-game grouped CV, a model trained only on each other game, and a model
 trained on every other game plus out-of-fold segments of this one.
+Predictions are saved to CACHE/pred_*.npz for af.compare.
 """
 
+import os
 import sys
 
-import lightgbm as lgb
 import numpy as np
-from scipy.ndimage import uniform_filter1d
 from sklearn.model_selection import GroupKFold
 
-from .games import Game
+from .features import fill_nan
+from .game import open_game
 from .metrics import evaluate, fmt
-from .simple_methods import HZ
+from .model import finish, fit
 
-PARAMS = dict(objective="l1", n_estimators=400, learning_rate=0.03, num_leaves=15, min_child_samples=40,
-              subsample=0.8, subsample_freq=1, colsample_bytree=0.7, reg_lambda=1.0)
 FOLDS = 6
-
-
-def fit(Xs, ys):
-    return lgb.LGBMRegressor(**PARAMS, verbose=-1).fit(np.vstack(Xs), np.concatenate(ys))
-
-
-def finish(g, p):
-    return uniform_filter1d(np.clip(p, 0, g.max_x), int(2 * HZ), mode="nearest")
 
 
 def oof(g, others=()):
@@ -38,31 +29,36 @@ def oof(g, others=()):
     for tr, te in GroupKFold(FOLDS).split(ui, groups=g.sid[ui]):
         m = fit([g.X[ui[tr]]] + [o.X[o.use] for o in others], [g.y[ui[tr]]] + [o.y[o.use] for o in others])
         p[ui[te]] = m.predict(g.X[ui[te]])
-    idx = np.where(~np.isnan(p))[0]
-    return np.interp(np.arange(len(p)), idx, p[idx])
+    return fill_nan(p)
+
+
+def save(g, tag, p):
+    np.savez(os.path.join(g.cache, f"pred_{tag}.npz"), t=g.t, pred=p)
 
 
 def main():
-    names = sys.argv[1:] or ["g1", "g2"]
-    games = [Game(n) for n in names]
-    for g in games:
+    games = [open_game(s) for s in sys.argv[1:]]
+    for i, g in enumerate(games):
         h = g.human
-        print(f"== {g.name}: {g.use.sum() / HZ / 60:.1f} labelled min")
-        print(fmt("  median sm2", evaluate(g.t, finish(g, g.med), h)))
+        if h is None:
+            print(f"== {g.video_dir}: no hand-tracked path, skipped")
+            continue
+        print(f"== game {i}: {g.video_dir}, {g.use.sum() / 5 / 60:.1f} labelled min")
+        print(fmt("  median sm2", evaluate(g.t, finish(g.med, g.max_x), h)))
         for d in (1, 2):
             print(fmt(f"  human +{d}s", evaluate(g.t, np.interp(g.t - d * 1000, h.t, h.x), h)))
-        cv = finish(g, oof(g))
+        cv = finish(oof(g), g.max_x)
         print(fmt("  within-game CV", evaluate(g.t, cv, h)))
-        np.savez(f"D:/temp/af/feats/pred_{g.name}_cv.npz", t=g.t, pred=cv)
-        others = [o for o in games if o is not g]
-        for o in others:
-            p = finish(g, fit([o.X[o.use]], [o.y[o.use]]).predict(g.X))
-            print(fmt(f"  trained on {o.name} only", evaluate(g.t, p, h)))
-            np.savez(f"D:/temp/af/feats/pred_{g.name}_from_{o.name}.npz", t=g.t, pred=p)
+        save(g, "cv", cv)
+        others = [o for o in games if o is not g and o.human is not None]
+        for j, o in enumerate(others):
+            p = finish(fit([o.X[o.use]], [o.y[o.use]]).predict(g.X), g.max_x)
+            print(fmt(f"  trained on {os.path.basename(o.video_dir.rstrip('/'))} only", evaluate(g.t, p, h)))
+            save(g, f"from_{j}", p)
         if others:
-            p = finish(g, oof(g, others))
-            print(fmt(f"  CV + all of {'+'.join(o.name for o in others)}", evaluate(g.t, p, h)))
-            np.savez(f"D:/temp/af/feats/pred_{g.name}_cv_plus.npz", t=g.t, pred=p)
+            p = finish(oof(g, others), g.max_x)
+            print(fmt("  CV + all other games", evaluate(g.t, p, h)))
+            save(g, "cv_plus", p)
 
 
 if __name__ == "__main__":
