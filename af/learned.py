@@ -40,7 +40,10 @@ def frame_features(xs_list, max_x):
     return q, hist, cnt
 
 
-def build_features(xs_list, max_x):
+EXTRA_OFFSETS_S = (-4, -2, -1, 0, 1, 2, 4)
+
+
+def build_features(xs_list, max_x, extra=None, extra_names=()):
     q, hist, cnt = frame_features(xs_list, max_x)
     # light per-sample smoothing (1s) before stacking, detections are noisy
     k = int(HZ)
@@ -65,6 +68,15 @@ def build_features(xs_list, max_x):
     for w in (10, 20):
         cols.append(uniform_filter1d(qs[:, 2], int(w * HZ), mode="nearest")[:, None])
         names.append(f"med_avg{w}")
+    if extra is not None:
+        es = uniform_filter1d(extra, k, axis=0, mode="nearest")
+        for off in EXTRA_OFFSETS_S:
+            j = np.clip(idx + int(off * HZ), 0, n - 1)
+            cols.append(es[j]); names += [f"{nm}@{off}" for nm in extra_names]
+        # cumulative motion over longer windows: net drift of play
+        for w in (2, 4):
+            cols.append(uniform_filter1d(extra[:, :1], int(w * HZ), axis=0, mode="nearest"))
+            names.append(f"v_mean_avg{w}")
     return np.hstack(cols), names
 
 
@@ -90,6 +102,8 @@ def cross_val_predict(X, y, groups, folds, params):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--folds", type=int, default=6)
+    ap.add_argument("--motion", action="store_true")
+    ap.add_argument("--out", default=r"D:/temp/af/learned_cv.npz")
     ap.add_argument("--holdout-from", type=float, default=0,
                     help="also train on t < this (s) and test on t >= this, e.g. 3093 = period 3")
     args = ap.parse_args()
@@ -98,8 +112,13 @@ def main():
     human.set_frame_size(3840, 2880)
     det = Detections(DETS, EDGES, human.max_x)
     t = det.times
-    xs = det.per_sample(det.on_ice())
-    X, names = build_features(xs, human.max_x)
+    keep = det.on_ice()
+    xs = det.per_sample(keep)
+    extra, enames = None, ()
+    if args.motion:
+        from .motion import summarise, velocities
+        extra, enames = summarise(velocities(det, keep, with_x=True))
+    X, names = build_features(xs, human.max_x, extra, enames)
 
     scored = human.scored_mask(t)
     sid = segment_ids(human, t)
@@ -118,7 +137,7 @@ def main():
     for sm in (1, 2, 3):
         v = uniform_filter1d(full, int(sm * HZ), mode="nearest")
         print(fmt(f"lgbm cv sm{sm}", evaluate(t, v, human)))
-    np.savez(r"D:/temp/af/learned_cv.npz", t=t, pred=full)
+    np.savez(args.out, t=t, pred=full)
 
     if args.holdout_from:
         import lightgbm as lgb
