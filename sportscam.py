@@ -17,6 +17,7 @@ import gamestate
 from highlight import Highlights
 import logo_player
 from util import rotate_image, rotate_image_crop, rotate_point
+from review import ReviewSession, LEAD_IN_MS, PAUSE_AFTER_MS
 
 parser = argparse.ArgumentParser()
 parser.add_argument("basepath", help="Base path to begin video processing from")
@@ -27,6 +28,8 @@ parser.add_argument("--logo", type=str, help="Logo screen wipe")
 parser.add_argument("--show-logo", action="store_true", help="Only show logo")
 parser.add_argument("--pos", action="store_true", help="Show posession")
 parser.add_argument("--keys", action="store_true", help="Show keys")
+parser.add_argument("--review", action="store_true", help="Review the autotrack path, worst segments first")
+parser.add_argument("--edit", action="store_true", help="Open for editing/recording without the start-up menu")
 args = parser.parse_args()
 
 def show_keys():
@@ -70,12 +73,21 @@ def show_keys():
     print("\t8,9 - from current camera, move back/forward 1 canera mark")
     print("\t0 - move to last camera mark")
 
+    print("Review (--review, or 1 in the start-up menu)")
+    print("\t= / -  - next / previous segment (plays from 3s before, pauses after)")
+    print("\tEnter  - segment OK")
+    print("\ta      - re-record: replaces the path only while recording")
+    print("\tT      - start: rendering begins here (do this at the first faceoff)")
+    print("\tY      - end: nothing after here is rendered")
+    print("\tc ... c - cut from the first press to the second (C cancels)")
+
     print("Mouse Controls")
     print("\tleft   - place camera marker")
     print("\tright  - increase shot count (left/right auto detect from x value)")
     print("\tmiddle - increase goal count (left/right auto detect from x value)")
 
 writeOutputFile = args.render
+review_mode = args.review
 basePath = args.basepath
 show_posession = args.pos
 preview = True
@@ -135,6 +147,53 @@ def save_pkl(filename, data):
     except:
         pass
 
+def start_menu():
+    """With just a folder on the command line: say what's there and ask how to open it."""
+    global writeOutputFile, review_mode
+    import json
+    import subprocess
+    import sys
+    while True:
+        raw = sorted(f for f in glob.glob(path.join(basePath, "*.mp4")) if "_processed" not in f)
+        if not raw:
+            print(f"no .mp4 files in {basePath}")
+            exit(1)
+        game = load_pkl(str(Path(raw[0]).with_suffix("")) + ".pkl")
+        auto = path.exists(path.join(basePath, AUTO_PATH_PKL))
+        review_json = path.join(basePath, "review.json")
+        n_review = len(json.load(open(review_json))["entries"]) if path.exists(review_json) else 0
+        print(f"\n{basePath}: {len(raw)} videos")
+        if game is not None:
+            ct = game["camera_path"].camera_targets
+            n_auto = sum(getattr(c, "source", "human") == "auto" for c in ct)
+            print(f"  game pkl: {len(ct)} camera points ({n_auto} auto, {len(ct) - n_auto} recorded)")
+        else:
+            print("  game pkl: none yet (calibration defaults)")
+        print(f"  autotrack: {'auto path ready' if auto else 'not run'}"
+              + (f", {n_review} review segments" if n_review else ""))
+        print("  1) review the auto path, least certain parts first" if auto else "  1) review (run autotrack first)")
+        print("  2) edit / record")
+        print("  3) render")
+        print("  4) run autotrack (about 50 min per game; re-runs take seconds)")
+        print("  q) quit")
+        choice = input("> ").strip().lower()
+        if choice == "1" and auto:
+            review_mode = True
+            return
+        if choice == "2":
+            return
+        if choice == "3":
+            writeOutputFile = True
+            return
+        if choice == "4":
+            subprocess.run([sys.executable, path.join(path.dirname(path.abspath(__file__)), "autotrack.py"), basePath])
+            continue
+        if choice == "q":
+            exit(0)
+
+if not (args.render or args.review or args.edit or args.keys or args.show_logo):
+    start_menu()
+
 cv2.namedWindow('frame')
 cv2.setMouseCallback('frame', mouse_callback)
 
@@ -192,6 +251,12 @@ class Processor:
             self.camera_path = auto["camera_path"]
             print(f"Loaded {len(self.camera_path.camera_targets)} auto camera targets from {AUTO_PATH_PKL}")
 
+        self.review_done = loaded.get("review_done", []) if loaded is not None else []
+        self.review = None
+        if review_mode:
+            self.review = ReviewSession(path.dirname(self.filename), self.review_done)
+            print(f"Review: {len(self.review.entries)} segments in review.json")
+
     def load_camera_config_pickle(self, pkl):
         self.top_of_roi = pkl["top_of_roi"]
         self.top_of_roi_left = pkl["top_of_roi_left"]
@@ -230,6 +295,7 @@ class Processor:
             "camera_path" : self.camera_path,
             "auto_record":self.auto_record,
             "highlights":self.highlights,
+            "review_done": sorted(self.review.done) if self.review is not None else self.review_done,
             # processing state
             "rendered" : writeOutputFile and finished,
             "finished" : finished,
@@ -281,9 +347,67 @@ class Processor:
 
         return (left,neutral,right)
 
+    def review_start_end(self):
+        """(start ms, whether a recorded start exists, end ms) of the path being reviewed."""
+        path_ = self.camera_path
+        start_set = any(getattr(c, "source", "human") == "human" for c in path_.camera_targets)
+        return path_.get_start_time(), start_set, path_.get_last_cam_time()
+
+    def handle_review_keys(self, key, frame_time):
+        """Review-mode keys; returns True when the key was handled here."""
+        r = self.review
+        cam, _, _ = self.camera_path.get_camera_at_time(frame_time)
+
+        def marker(t, source, cut_to=False):
+            c, _, _ = self.camera_path.get_camera_at_time(t)
+            return CameraTarget(t, x=int(c.x), y=c.y, cut_to=cut_to, zoom=1.0, game_state=self.game_state, source=source)
+
+        if key in (ord('='), ord('-')):
+            start, _, end = self.review_start_end()
+            e = r.step(start, end, forward=key == ord('='))
+            if e is not None:
+                self.set_time(max(0, e["t0"] - LEAD_IN_MS))
+                self.paused = False
+            return True
+        if key == 13:  # Enter: this segment is fine (or now fixed)
+            r.accept()
+            return True
+        if key == ord('T'):  # start: a recorded point here; earlier recorded points no longer count
+            for c in self.camera_path.camera_targets:
+                if c.time < frame_time and getattr(c, "source", "human") == "human":
+                    c.source = "review"
+            self.camera_path.replace_range(frame_time - 500, frame_time + 500, [marker(frame_time, "human")])
+            return True
+        if key == ord('Y'):  # end: nothing after here is rendered
+            self.camera_path.replace_range(frame_time - 500, float("inf"), [marker(frame_time, "review")])
+            return True
+        if key == ord('c'):  # two presses: cut from the first to the second
+            if r.cut_start is None:
+                r.cut_start = frame_time
+            elif frame_time > r.cut_start + 2000:
+                a, b = r.cut_start, frame_time
+                self.camera_path.replace_range(a - 500, b + 500, [marker(a, "review", cut_to=True), marker(b, "review")])
+                r.cut_start = None
+            return True
+        if key == ord('C'):
+            r.cut_start = None
+            return True
+        if key == ord('a'):  # recording replaces the path from here until stopped
+            self.auto_record = not self.auto_record
+            if self.auto_record:
+                self.paused = False
+                r.record_from = frame_time - 1
+            return True
+        return False
+
     def handle_keys(self, key, frame_time):
+        if self.review is not None and key != 255 and self.handle_review_keys(key, frame_time):
+            return
+
         def set_camera_cut():
             highlight_is_saving = self.highlights.get_active_save_highlight() is not None
+            if self.review is not None:
+                return  # cuts are made with the two-press c in review mode
             if not highlight_is_saving and len(self.camera_path.camera_targets) > 0:
                 self.camera_path.camera_targets[-1].cut_to = True
                 self.auto_record = False
@@ -693,6 +817,14 @@ class Processor:
                     new_target = CameraTarget(frame_time, x=clamped_mouse_x, y=live_y, zoom=self.zoom, game_state=self.game_state)
                     if active_save_highlight is not None:
                         active_save_highlight.get_camera_path().add_camera_target(new_target)
+                    elif self.review is not None:
+                        # review: replace only what was re-recorded, keep the path after it
+                        new_target.source = "review"
+                        if self.auto_record and self.review.record_from is not None:
+                            self.camera_path.replace_range(self.review.record_from, frame_time, [new_target])
+                            self.review.record_from = frame_time + 1
+                        else:
+                            self.camera_path.replace_range(frame_time - 500, frame_time + 500, [new_target])
                     else:
                         self.camera_path.add_camera_target(new_target)
                         self.truncate_bookmarks_to_time(frame_time)
@@ -700,6 +832,13 @@ class Processor:
                     mouse_left_click = False
                     mouse_middle_click = False
                     mouse_right_click = False
+
+                # review: stop just after the segment so it can be accepted or re-recorded
+                r = self.review
+                if r is not None and r.current is not None and not r.at_end and not self.auto_record \
+                        and not self.paused and frame_time > r.current["t1"] + PAUSE_AFTER_MS:
+                    self.paused = True
+                    r.at_end = True
 
                 show_target = not writeOutputFile and zoom > 1.0 and (next_camera.time < frame_time or self.paused)
                 out_frame = self._create_output_frame(frame, frame_x, frame_y, zoom, show_target)
@@ -782,6 +921,12 @@ class Processor:
                     left,neutral,right = self.calculate_zone_times_seconds()
                     line3 = f"{ms_str(left*1000)} | {ms_str(neutral*1000)} | {ms_str(right*1000)}"
                     cv2.putText(frame, line3, (0,text_y+50*2), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,255,0), 2)
+
+                    if self.review is not None:
+                        start, start_set, end = self.review_start_end()
+                        for k, line in enumerate(self.review.status_lines(frame_time, start, start_set, end)):
+                            cv2.putText(frame, line, (0, text_y + 50 * (3 + k)), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
+                        self.review.draw_timeline(frame, frame_time, total_vid_time, start, end, frame.shape[0] - 46)
 
                     cv2.imshow('frame',frame)
 

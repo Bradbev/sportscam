@@ -432,3 +432,44 @@ the auto path with yours inside the chosen segments):
   don't use up review time.
 - On G2's videos with no pkl (`D:\temp\af\render_g2`), it found 87 segments in 12 s.
   The reasons: 71 fast transition, 13 unsure, 2 models disagree, 1 detections unstable.
+
+### Stage C: review mode in the app (done)
+
+**Start-up menu.** `python sportscam.py DIR` with no other flags first prints what's in
+the folder: number of videos, game pkl camera points (auto and recorded), and whether
+autotrack has run and how many review segments it found. Then it asks:
+1. Review the auto path.
+2. Edit / record (the old default; `--edit` skips the menu).
+3. Render.
+4. Run autotrack.
+
+`--review` opens review mode directly.
+
+**Review mode** (`review.py` holds `ReviewSession`; the app wiring is in `sportscam.py`):
+
+| Key | Action |
+|---|---|
+| `=` / `-` | Next / previous segment. Playback starts 3 s before and pauses 1 s after. |
+| Enter | Segment OK (saved in the game pkl as `review_done`). |
+| `a` | Re-record. While recording, new points replace the path; the rest is untouched, with about a 1 s glide back into the auto path. A single click replaces one point. |
+| `T` | Start: a recorded point here. Rendering starts at the first *recorded* point (your rule). Any earlier recorded points stop counting. |
+| `Y` | End: the path stops here, and rendering ends at the last point. |
+| `c` … `c` | Cut from the first press to the second (for example over an intermission). It deletes the points between and flags the first, so the render jumps. `C` cancels. |
+
+- **Tiers** are worked out live after the start point: tier 1 is about the first 5 min
+  of segments by rank, tier 2 the next 5 min, tier 3 the next 10. Within a tier,
+  segments play in time order. Status lines show per-tier progress, the start and end,
+  and the current segment's reason and expected error.
+- **Timeline strip** along the bottom: segments in red, orange and yellow by tier, green
+  once reviewed. A white box marks the current segment and a white line the playhead.
+- Points re-recorded in review mode are tagged `review`, not `human`, so a mid-game fix
+  can never become the render start; only `T`, or recording outside review mode, sets it.
+- In review mode the old `c` (cut at the *last* point) and the cut that `p` makes are
+  disabled, because on an auto path the last point is the end of the video.
+- Tests: `tests/test_review.py` (3), plus the camera path and autotrack tests: 10 pass.
+- **Headless drive** of `--review` on G2's videos, with the windows stubbed and keys
+  scripted: `T`, `=`, Enter, `=`, `a`…`a`, Enter, `c`…`c`, `Y`, `q`. The saved pkl has
+  the start at 0, two review points from the re-record, a cut point and its restart
+  point, the end at 1266 s, `review_done` with both segments, and a still-sorted path.
+- **Not yet checked by a person:** how it feels to use. Key choices, pause timing and
+  timeline readability need you to try it.
