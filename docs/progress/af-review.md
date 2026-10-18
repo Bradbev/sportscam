@@ -605,3 +605,9 @@ Changes:
 frame against the board: 4-2 to the Bombshells. Your copy refreshed to 2-4 in the app's
 team order, with all goal and period bookmarks, and kept your start 3:09, both cuts, the
 30:06 point and the end 57:21. Tests: 15 pass.
+- **Menu option 5, convert for sharing:** does what `convert.bat` does
+  (`ffmpeg -i <first video>_processed.mp4 -c:v hevc_nvenc -preset fast -vtag hvc1`) and
+  writes next to your other finished games. It prompts `name: 2026-10-18-` and you type
+  the rest, e.g. `Bombshells_v_Supernovas`, giving
+  `D:\RawVideo\2026-10-18-Bombshells_v_Supernovas.mp4`. It asks before overwriting. A
+  2-minute test render went from 771 MB to 31 MB.

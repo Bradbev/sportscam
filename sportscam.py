@@ -151,6 +151,30 @@ def save_pkl(filename, data):
     except:
         pass
 
+def convert_render(processed):
+    """convert.bat's shrink (HEVC on the GPU), written next to the other finished games as
+    <folder date>-<what you type>.mp4, e.g. 2026-10-18-Bombshells_v_Supernovas.mp4."""
+    import subprocess
+    game_dir = path.dirname(path.abspath(processed))
+    prefix = path.basename(game_dir) + "-"
+    name = input(f"name: {prefix}").strip()
+    if not name:
+        print("  cancelled")
+        return
+    if not name.lower().endswith((".mp4", ".mov")):
+        name += ".mp4"
+    out = path.join(path.dirname(game_dir), prefix + name)
+    if path.exists(out) and input(f"  {out} exists; overwrite? [y/N] ").strip().lower() != "y":
+        print("  cancelled")
+        return
+    print(f"  converting {processed} -> {out}")
+    result = subprocess.run(["ffmpeg", "-y", "-i", processed, "-c:v", "hevc_nvenc", "-preset", "fast", "-vtag", "hvc1", out])
+    size = lambda p: humanize.naturalsize(path.getsize(p))
+    if result.returncode == 0:
+        print(f"  done: {out} ({size(out)}, from {size(processed)})")
+    else:
+        print(f"  ffmpeg failed (exit {result.returncode})")
+
 def start_menu():
     """With just a folder on the command line: say what's there and ask how to open it."""
     global writeOutputFile, review_mode
@@ -192,6 +216,11 @@ def start_menu():
         print("  2) edit / record (no review items shown; R switches to review)")
         print("  3) render")
         print("  4) run autotrack (about 50 min per game; re-runs take seconds)")
+        processed = str(Path(raw[0]).with_suffix("")) + "_processed.mp4"
+        if path.exists(processed):
+            print(f"  5) convert the render for sharing -> {path.dirname(path.abspath(basePath))}\\<date>-<teams>.mp4")
+        else:
+            print("  5) convert the render for sharing (render first)")
         print("  q) quit")
         choice = input("> ").strip().lower()
         if choice == "" and auto is not None:
@@ -206,6 +235,9 @@ def start_menu():
             return
         if choice == "4":
             subprocess.run([sys.executable, path.join(path.dirname(path.abspath(__file__)), "autotrack.py"), basePath])
+            continue
+        if choice == "5" and path.exists(processed):
+            convert_render(processed)
             continue
         if choice == "q":
             exit(0)
