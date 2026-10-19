@@ -1,6 +1,7 @@
 # LightGBM in autotrack: a deeper look
 
-[How autotrack works](autotrack-explained.md) describes the whole pipeline. This document zooms in
+[How autotrack works](autotrack-explained.md) describes the whole pipeline, and the
+[code tour](autotrack-code-tour.md) follows the code. This document zooms in
 on the part that turns "where the skaters are" into "where you would put the camera": a
 **LightGBM** model. It covers:
 - what the model is;

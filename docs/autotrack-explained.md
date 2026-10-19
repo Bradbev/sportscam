@@ -5,7 +5,8 @@ images are from real games. Most come from **2026-10-18** (Bombshells v Supernov
 "your camera against the auto camera" comparison comes from **2026-10-11**, using the 11 minutes
 you tracked by hand there. Neither game was used to train the model.
 
-Code paths are given for each step, so you can look things up.
+Code paths are given for each step, so you can look things up. For the code itself, in the order
+it runs, see the [code tour](autotrack-code-tour.md).
 
 ---
 
