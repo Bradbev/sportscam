@@ -201,6 +201,8 @@ saw this game. Most of the time the two lines lie on top of each other. The gaps
 - **stoppages**, where you park and the model drifts with the skaters;
 - **deep in a zone**, where you go all the way to the end and the model stops a little short.
 
+For how the trees, boosting and settings work, see [LightGBM in autotrack: a deeper look](lightgbm-explained.md).
+
 *Code:* `af/model.py` (and `af/transfer.py` for the cross-game test). *Model file:*
 `models/autotrack_lgbm.txt`, retrained with `python autotrack.py train DIR [DIR ...]`.
 
