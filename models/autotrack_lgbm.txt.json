@@ -169,7 +169,8 @@
   "v_mean_avg4"
  ],
  "trained_on": [
-  "D:/RawVideo/autoframe",
+  "D:/RawVideo/2026-07-05",
+  "D:/RawVideo/2026-08-22",
   "D:/RawVideo/2026-08-15"
  ],
  "params": {
