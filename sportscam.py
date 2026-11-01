@@ -74,7 +74,7 @@ def show_keys():
     print("\t8,9 - from current camera, move back/forward 1 canera mark")
     print("\t0 - move to last camera mark")
 
-    print("Review (--review, or 1 in the start-up menu)")
+    print("Review (--review, or 2 in the start-up menu)")
     print("\t= / -  - next / previous segment (plays from 3s before, pauses after)")
     print("\tEnter  - segment OK / yes it's a goal / cut this intermission")
     print("\tBackspace - not a goal / keep this intermission")
@@ -209,13 +209,27 @@ def start_menu():
                   + (f", {len(entries)} review items ({len(done & {e['t0'] for e in entries})} reviewed)" if entries else ""))
             if game is not None and ct and n_auto and auto.get("autotrack", {}).get("created") != game.get("auto_path_created"):
                 print("    (newer than this game's copy: it is refreshed on opening, keeping your edits)")
-        if auto is not None:
-            print("  1) REVIEW the auto path, least certain parts first   [Enter]")
+
+        if game is None:
+            # Nothing else makes sense until the camera is calibrated: that's done in edit / record,
+            # and quitting saves the game pkl, after which the full menu appears.
+            print("  1) CALIBRATE the camera (rotation, zones, ROI; quit to save)   [Enter]")
+            print("  q) quit")
+            choice = input("> ").strip().lower()
+            if choice in ("", "1"):
+                return
+            if choice == "q":
+                exit(0)
+            continue
+
+        if auto is None:
+            print("  1) RUN AUTOTRACK (about 50 min per game; re-runs take seconds)   [Enter]")
+            print("  2) review (run autotrack first)")
         else:
-            print("  1) review (run autotrack first)")
-        print("  2) edit / record (no review items shown; R switches to review)")
-        print("  3) render")
-        print("  4) run autotrack (about 50 min per game; re-runs take seconds)")
+            print("  1) run autotrack again (re-runs take seconds)")
+            print("  2) REVIEW the auto path, least certain parts first   [Enter]")
+        print("  3) edit / record (no review items shown; R switches to review)")
+        print("  4) render")
         processed = str(Path(raw[0]).with_suffix("")) + "_processed.mp4"
         if path.exists(processed):
             print(f"  5) convert the render for sharing -> {path.dirname(path.abspath(basePath))}\\<date>-<teams>.mp4")
@@ -223,19 +237,19 @@ def start_menu():
             print("  5) convert the render for sharing (render first)")
         print("  q) quit")
         choice = input("> ").strip().lower()
-        if choice == "" and auto is not None:
-            choice = "1"
-        if choice == "1" and auto is not None:
-            review_mode = True
-            return
-        if choice == "2":
-            return
-        if choice == "3":
-            writeOutputFile = True
-            return
-        if choice == "4":
+        if choice == "":
+            choice = "1" if auto is None else "2"
+        if choice == "1":
             subprocess.run([sys.executable, path.join(path.dirname(path.abspath(__file__)), "autotrack.py"), basePath])
             continue
+        if choice == "2" and auto is not None:
+            review_mode = True
+            return
+        if choice == "3":
+            return
+        if choice == "4":
+            writeOutputFile = True
+            return
         if choice == "5" and path.exists(processed):
             convert_render(processed)
             continue
@@ -305,10 +319,34 @@ class Processor:
         if auto is not None:
             created = auto.get("autotrack", {}).get("created")
             targets = self.camera_path.camera_targets
+            start = None  # the start-of-play click made while calibrating
+            if targets and not any(is_auto(c) for c in targets) and self.auto_path_created is None:
+                if len(targets) == 1:
+                    start = targets[0]
+                    targets = []
+                else:
+                    # more than a start click: possibly a hand-tracked game, so ask
+                    print(f"This game has {len(targets)} recorded camera points "
+                          f"({ms_str(targets[0].time)} to {ms_str(targets[-1].time)}) and no auto path yet.")
+                    if input(f"Replace them with autotrack's path from {AUTO_PATH_PKL}, keeping the first "
+                             f"as the start of play? [Y/n] ").strip().lower() in ("", "y", "yes"):
+                        import shutil
+                        backup = self.filename + ".pkl.before-auto"
+                        shutil.copy2(self.filename + ".pkl", backup)
+                        print(f"  replaced (backup: {backup})")
+                        start = targets[0]
+                        targets = []
             if len(targets) == 0:
                 if loaded is None:
                     self.load_camera_config_pickle(auto)  # the calibration the path was computed with
                 self.camera_path = auto["camera_path"]
+                if start is not None:
+                    # a recorded point among auto ones marks the start (CameraPath.get_start_time)
+                    _, _, nxt = self.camera_path.get_camera_at_time(start.time)
+                    start.game_state = nxt.game_state.copy()
+                    start.source = "human"
+                    self.camera_path.replace_range(start.time - 500, start.time + 500, [start])
+                    print(f"Start of play kept at {ms_str(start.time)}")
                 if not self.bookmark_times_ms:
                     self.bookmark_times_ms = list(auto.get("bookmark_times_ms", []))  # periods and goals
                 self.auto_path_created = created

@@ -32,6 +32,8 @@ def main():
     ap.add_argument("--cache", help="default: DIR/autotrack_cache")
     ap.add_argument("--model", default=M.DEFAULT_MODEL)
     args = ap.parse_args()
+
+    print("Running autotrack.  Messages every 250 frames")
     pipeline.run(args.dir, args.cache, args.model)
 
 
