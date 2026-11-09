@@ -374,7 +374,7 @@ possible missed goal.
 
 | What | Where |
 |---|---|
-| Run it | `python autotrack.py DIR` (or option 4 in the app's start-up menu) |
+| Run it | `python autotrack.py DIR` (or option 1 in the app's start-up menu) |
 | Retrain | `python autotrack.py train DIR [DIR ...]` (folders with hand-tracked game pkls) |
 | Pipeline steps | `af/pipeline.py` |
 | Geometry (camera x, the crop) | `af/geometry.py`, `af/calibration.py` |

@@ -276,18 +276,20 @@ If the folder's own pkl is hand-tracked, `run` finally prints the score against 
 Module level, top to bottom:
 1. argparse, including `--review` and `--edit`.
 2. If no mode flag was given, [`start_menu`](../sportscam.py#L178) runs
-   ([sportscam.py:245](../sportscam.py#L245)). It summarises the folder and sets `review_mode`
-   or `writeOutputFile` from your choice. It runs autotrack as a subprocess, or
+   ([sportscam.py:259](../sportscam.py#L259)). It summarises the folder. With no game pkl yet it offers only
+   "Calibrate the camera" (edit / record; quitting saves the pkl). Otherwise the options are run
+   autotrack, review, edit / record, render, convert; it sets `review_mode` or `writeOutputFile`
+   from your choice. It runs autotrack as a subprocess, or
    [`convert_render`](../sportscam.py#L154) (the `convert.bat` equivalent), and loops back.
-3. `show_keys()`, `load_logo()`, then [`examine_files`](../sportscam.py#L1133), which creates a
+3. `show_keys()`, `load_logo()`, then [`examine_files`](../sportscam.py#L1171), which creates a
    `Processor` and calls `process()`.
 
 ### 5.2 `Processor.__init__`: which camera path to use
 
-[sportscam.py:252](../sportscam.py#L252):
+[sportscam.py:266](../sportscam.py#L266):
 1. Load the game pkl: calibration, camera path, highlights, bookmarks, and the review state
    (`review_done`, `review_goal_changes`, `auto_path_created`).
-2. **Sidecar** ([sportscam.py:304](../sportscam.py#L304)):
+2. **Sidecar** ([sportscam.py:318](../sportscam.py#L318)):
    - **No camera points:** copy `auto_path.pkl`'s path in, with its bookmarks, and its
      calibration if there was no game pkl.
    - **An auto path, and the sidecar's `created` differs:** back up to `.pkl.before-refresh`, then
@@ -296,44 +298,47 @@ Module level, top to bottom:
      older app are recovered by [`legacy_goal_changes`](../review.py#L48), minus any the new path
      already has ([`drop_known_goals`](../review.py#L61)). Goal bookmarks are rebuilt by
      [`goal_bookmarks`](../review.py#L36).
+   - **Only a start marker** (the one point placed while calibrating, and never an auto path):
+     the auto path is copied in and that point kept as the start of play. More than one recorded
+     point asks first, backing up to `.pkl.before-auto`.
    - **A path you recorded:** left alone.
-3. With `--review`, [`start_review`](../sportscam.py#L344) creates a
+3. With `--review`, [`start_review`](../sportscam.py#L382) creates a
    [`ReviewSession`](../review.py#L106) and marks cut entries already covered by a cut as done.
 
 ### 5.3 `process()`: the frame loop
 
-[sportscam.py:796](../sportscam.py#L796), once per frame:
+[sportscam.py:834](../sportscam.py#L834), once per frame:
 
 1. Read a frame, or reuse the last one when paused.
 2. [`CameraPath.get_camera_at_time`](../camerapath.py#L71) returns the interpolated camera,
    eased when the direction changes, plus the current and next points. The display score and
    period come from the next point's `game_state`
-   ([sportscam.py:852](../sportscam.py#L852)).
+   ([sportscam.py:890](../sportscam.py#L890)).
 3. **Render end:** when rendering and past the last camera point, the logo wipe plays and the
    render finishes. That's why `Y` (end) works: it makes your end marker the last point.
-4. **Start jump** on the first frame ([sportscam.py:893](../sportscam.py#L893)): jump to
+4. **Start jump** on the first frame ([sportscam.py:931](../sportscam.py#L931)): jump to
    [`CameraPath.get_start_time`](../camerapath.py#L58), which is the first `"human"` point on a
    path that mixes auto and recorded points, otherwise the first point.
-5. **Cuts** ([sportscam.py:935](../sportscam.py#L935)): at a point with `cut_to`, wipe and jump to
+5. **Cuts** ([sportscam.py:973](../sportscam.py#L973)): at a point with `cut_to`, wipe and jump to
    the next point. Review-mode cuts work this way.
-6. **Recording** ([sportscam.py:944](../sportscam.py#L944)):
+6. **Recording** ([sportscam.py:982](../sportscam.py#L982)):
    - **Normal mode:** `add_camera_target`, which truncates everything after (unchanged
      behaviour).
    - **Review mode:** [`CameraPath.replace_range`](../camerapath.py#L43) replaces only the time
      covered: from `record_from` up to now while `a` is on, or ±0.5 s for a single click. The new
      point is `source="review"`.
-   - **Middle click in review:** [`adjust_goal`](../sportscam.py#L451) instead, which applies to
+   - **Middle click in review:** [`adjust_goal`](../sportscam.py#L489) instead, which applies to
      every later point and records the change. It doesn't move the camera.
-7. **Review auto-pause** ([sportscam.py:983](../sportscam.py#L983)): pause 1 s after the current
+7. **Review auto-pause** ([sportscam.py:1021](../sportscam.py#L1021)): pause 1 s after the current
    segment ends.
 8. Build the output frame (crop, mini scoreboard, period/score overlay). Then either write it to
    the render file, or draw the big window with the status lines and, in review mode,
    [`status_lines`](../review.py#L167) and [`draw_timeline`](../review.py#L189).
-9. `waitKey` → [`handle_keys`](../sportscam.py#L535). `R` toggles review mode. In review mode
-   [`handle_review_keys`](../sportscam.py#L458) gets the key first: `=`/`-` step,
+9. `waitKey` → [`handle_keys`](../sportscam.py#L573). `R` toggles review mode. In review mode
+   [`handle_review_keys`](../sportscam.py#L496) gets the key first: `=`/`-` step,
    Enter/Backspace decide, `T`/`Y`/`c` mark, `a` records, `[ { ] }` change the score.
    Anything it doesn't handle falls through to the normal keys.
-10. On quit, [`save_pickle`](../sportscam.py#L369) writes the game pkl, including the review keys.
+10. On quit, [`save_pickle`](../sportscam.py#L407) writes the game pkl, including the review keys.
 
 ### 5.4 The review session: `review.py`
 
